@@ -36,17 +36,38 @@ Przepływ:
 1. Klient MCP odkrywa `/.well-known/oauth-protected-resource` → wskazuje nasz
    serwer autoryzacji (`/.well-known/oauth-authorization-server`).
 2. Klient rejestruje się w `/oauth/register` (DCR). `client_id` to **podpisany
-   JWT** kodujący `redirect_uris` — brak bazy danych.
-3. `/oauth/authorize` (PKCE S256) waliduje żądanie i przekierowuje użytkownika
-   do logowania Google; oryginalne parametry przenosi podpisany `state`.
-4. `/oauth/callback` wymienia kod Google, weryfikuje `id_token` przez JWKS
-   Google, sprawdza `ALLOWED_EMAIL`, a następnie wystawia **nasz** krótki kod.
-5. `/oauth/token` weryfikuje kod + PKCE i wystawia **access token** (JWT,
-   audience = `/api/mcp`, TTL 1 h).
-6. `/api/mcp` (`withMcpAuth`) weryfikuje token i ponownie sprawdza e-mail.
+   JWT** kodujący `redirect_uris`, z `exp` (domyślnie 30 dni) — brak bazy
+   danych. Redirect_uris muszą być `https` (lub `http://localhost` wyłącznie
+   w trybie development) i — jeśli skonfigurowano `ALLOWED_OAUTH_REDIRECT_URIS`
+   — dokładnie wymienione na tej allowliście (fail-closed, bez wildcardów).
+3. `/oauth/authorize` (PKCE S256) waliduje żądanie i renderuje **ekran
+   zgody** (HTML, GET) — pokazuje nazwę klienta i host redirect_uri.
+   NIE przekierowuje automatycznie do Google.
+4. Użytkownik świadomie klika „Zezwól" → `POST /oauth/consent` (chronione
+   CSRF wzorcem double-submit-cookie, stan zgody to podpisany, krótkożyciowy
+   JWT — `AUD_CONSENT`, TTL 5 min). Dopiero **teraz** następuje przekierowanie
+   do logowania Google; oryginalne parametry klienta przenosi podpisany
+   `state` (`AUD_STATE`). „Odrzuć" (lub nieprawidłowa/wygasła zgoda) kończy
+   proces przekierowaniem do klienta z `error=access_denied`, bez logowania
+   do Google i bez wydania kodu.
+5. `/oauth/callback` wymienia kod Google, weryfikuje `id_token` przez JWKS
+   Google (issuer/audience), sprawdza `email_verified` i `ALLOWED_EMAIL`
+   (wydzielone do `lib/auth/googleIdentity.ts`), a następnie wystawia
+   **nasz** krótki kod autoryzacyjny (z losowym `jti`).
+6. `/oauth/token` wymaga `client_id`/`redirect_uri` (dokładna zgodność z
+   kodem), weryfikuje PKCE, sprawdza e-mail (obrona w głąb), a następnie
+   **atomowo zużywa `jti`** przez Helios Drive Adapter
+   (`consumeAuthCode` — Apps Script `LockService` + `PropertiesService`,
+   przechowuje wyłącznie `jti` + `exp`, nigdy kod/token) — druga wymiana
+   tego samego kodu jest odrzucana (`invalid_grant`). Awaria adaptera →
+   odmowa (fail-closed), nie ryzykujemy powtórnego użycia. Dopiero wtedy
+   wystawiany jest **access token** (JWT, audience = `/api/mcp`, TTL 1 h).
+7. `/api/mcp` (`withMcpAuth`) weryfikuje token i ponownie sprawdza e-mail.
 
-Stan jest **bezstanowy** (wszystko podpisane `AUTH_SECRET`), więc nie
-potrzebujemy Redisa ani bazy — zgodnie z planem Hobby.
+Stan jest w większości **bezstanowy** (wszystko podpisane `AUTH_SECRET`);
+jedynym stanem serwerowym jest zbiór zużytych `jti` kodów autoryzacyjnych
+(Apps Script `PropertiesService`, z auto-czyszczeniem wygasłych wpisów) —
+nadal bez Redisa i bez bazy danych, zgodnie z planem Hobby.
 
 **Ryzyka:**
 - *Interoperacyjność*: różne klienty MCP bywają wybredne wobec DCR/metadanych.
@@ -54,37 +75,54 @@ potrzebujemy Redisa ani bazy — zgodnie z planem Hobby.
   ChatGPT** (Krok 8–9 w README).
 - *Unieważnianie tokenu*: przy modelu bezstanowym trudniejsze → krótki TTL
   (1 h) i rotacja `AUTH_SECRET` (natychmiast unieważnia wszystkie tokeny).
-- *Brak testu E2E offline*: pełny handshake testujemy dopiero na Preview.
-  Testy jednostkowe pokrywają logikę kryptograficzną (PKCE, JWT, e-mail).
+- *Brak testu E2E offline*: pełny handshake (w tym weryfikacja `id_token`
+  przez prawdziwe JWKS Google) testujemy dopiero na Preview — `jose` na
+  Node pobiera JWKS przez `node:https` bezpośrednio, z pominięciem globalnego
+  `fetch`, więc nie da się tego sensownie zamockować w testach jednostkowych.
+  Logika decyzyjna PO weryfikacji podpisu (email/email_verified/ALLOWED_EMAIL)
+  jest wydzielona do `lib/auth/googleIdentity.ts` i w pełni testowana.
+- *Rate limiting jest best-effort*: licznik działa w pamięci pojedynczej
+  instancji serverless — na Vercel Hobby nie ma gwarancji współdzielenia
+  stanu między instancjami/cold-startami. To warstwa odstraszająca, nie
+  twarda gwarancja globalnego limitu (patrz README).
+- *Otwarty DCR*: złagodzony obowiązkowym ekranem zgody (użytkownik zawsze
+  widzi, do jakiego klienta/hosta trafi) oraz opcjonalną allowlistą
+  `ALLOWED_OAUTH_REDIRECT_URIS`.
 
 ## 3. Struktura plików
 
 ```
 app/
-  api/mcp/route.ts                                  # MCP (7 narzędzi read-only) + withMcpAuth
+  api/mcp/route.ts                                  # MCP (7 narzędzi read-only) + withMcpAuth + rate limit
   .well-known/oauth-protected-resource/route.ts     # RFC 9728
   .well-known/oauth-authorization-server/route.ts   # RFC 8414
   oauth/register/route.ts                           # Dynamic Client Registration
-  oauth/authorize/route.ts                          # authorization_code + PKCE → Google
+  oauth/authorize/route.ts                          # waliduje żądanie, renderuje EKRAN ZGODY (nie redirectuje do Google)
+  oauth/consent/route.ts                             # decyzja użytkownika (POST, CSRF) → dopiero teraz Google
   oauth/callback/route.ts                           # weryfikacja Google + ALLOWED_EMAIL
-  oauth/token/route.ts                              # wymiana kodu na access token
+  oauth/token/route.ts                              # wymiana kodu na access token + jednorazowe zużycie jti
   layout.tsx, page.tsx                              # minimalna strona (bez danych)
 lib/
-  config.ts             # odczyt env, redakcja sekretów
-  http.ts               # odpowiedzi + CORS
-  security/paths.ts     # traversal, absolutne, %, \, Unicode NFC, .md, rozmiar 1 MB
-  security/signing.ts   # postać kanoniczna + HMAC (Web Crypto)
-  security/conflict.ts  # expectedModifiedTime → konflikt
-  drive/client.ts       # podpisane żądanie do Apps Script (bez wycieku sekretów)
+  config.ts               # odczyt env, redakcja sekretów, allowlista redirect, tryb dev
+  http.ts                 # odpowiedzi + CORS + nagłówki bezpieczeństwa HTML
+  security/paths.ts       # traversal, absolutne, %, \, Unicode NFC, .md, rozmiar 1 MB
+  security/signing.ts     # postać kanoniczna + HMAC (Web Crypto)
+  security/conflict.ts    # expectedModifiedTime → konflikt
+  security/redirect.ts    # allowlista redirect_uri (fail-closed, dokładne dopasowanie)
+  security/rateLimit.ts   # rate limiting w pamięci procesu (best effort)
+  drive/client.ts         # podpisane żądanie do Apps Script (bez wycieku sekretów)
   drive/types.ts
-  auth/tokens.ts        # JWT: client_id / kod / state / access token + PKCE
-  auth/verifyToken.ts   # Resource Server: Bearer → e-mail → ALLOWED_EMAIL
-  auth/metadata.ts      # metadane OAuth
-  tools/handlers.ts     # logika 7 narzędzi (czyste funkcje)
-  tools/schemas.ts      # walidacja Zod
-  tools/constants.ts    # ścieżki struktury Helios
-apps-script/Code.gs     # kompletny adapter; pure-funkcje testowalne w Node
-test/                   # 15 kategorii testów bezpieczeństwa (node:test + tsx)
+  auth/tokens.ts          # JWT: client_id / kod (z jti) / state / zgoda / access token + PKCE
+  auth/verifyToken.ts     # Resource Server: Bearer → e-mail → ALLOWED_EMAIL
+  auth/googleIdentity.ts  # ocena tożsamości Google (email/email_verified) — czysta funkcja
+  auth/metadata.ts        # metadane OAuth
+  tools/handlers.ts       # logika 7 narzędzi (czyste funkcje)
+  tools/schemas.ts        # walidacja Zod
+  tools/constants.ts      # ścieżki struktury Helios
+apps-script/Code.gs       # kompletny adapter; pure-funkcje testowalne w Node;
+                          # limity listTree/search, consumeAuthCode (jednorazowość kodu OAuth)
+test/                     # testy bezpieczeństwa (node:test + tsx), w tym testy
+                          # endpointów OAuth przez bezpośrednie wywołanie route handlerów
 ```
 
 ## 4. Zewnętrzne usługi i koszty
@@ -108,7 +146,15 @@ test/                   # 15 kategorii testów bezpieczeństwa (node:test + tsx)
   `helios_create_backup`, `helios_move_to_archive`. Warstwa adaptera i
   bezpieczeństwa jest już gotowa (walidacja ścieżek, konflikt wersji, kopie),
   a operacje zapisu są **domyślnie zablokowane** dwoma bezpiecznikami:
-  `HELIOS_WRITE_ENABLED` (MCP) oraz `WRITE_ENABLED` (Apps Script).
+  `HELIOS_WRITE_ENABLED` (MCP) oraz `WRITE_ENABLED` (Apps Script). Ten PR
+  (poprawki po audycie bezpieczeństwa) **niczego tu nie zmienia** — żaden
+  z tych przełączników nie jest dotykany, żadne narzędzie zapisu nie jest
+  rejestrowane w MCP.
+  Przed Fazą 2: mechanizm nonce/CacheService+LockService wystarcza dla
+  odczytu (Faza 1), ale operacje zapisu będą potrzebować trwalszego,
+  dedykowanego mechanizmu idempotencji (analogicznego do `consumeAuthCode`
+  dla kodów OAuth), żeby dwukrotne dostarczenie tego samego żądania zapisu
+  (np. przez retry sieciowy) nie powodowało podwójnego zastosowania zmiany.
 
 ## 6. Testy bezpieczeństwa (uruchamiane: `npm test`)
 
@@ -116,8 +162,24 @@ Pokryte kategorie: poprawny odczyt, path traversal, zakodowany traversal,
 zapis poza folderem (ścieżka absolutna), konflikt wersji, błędny HMAC, stary
 timestamp, ponowny nonce, zbyt duży zapis, niedozwolone rozszerzenie, brak
 tokenu OAuth, błędny token, dozwolony `ALLOWED_EMAIL`, odrzucenie innego
-adresu, brak wycieku sekretów.
+adresu, brak wycieku sekretów — oraz (po audycie bezpieczeństwa): ekran
+zgody (renderowanie, CSRF, odrzucenie, wygasły/podrobiony stan), allowlista
+i walidacja redirect_uri (w tym ochrona przed open redirect), DCR (wygasły
+`client_id`), PKCE (brak, zła metoda, zły `code_verifier`), wymagany
+`client_id`/`redirect_uri` w `/oauth/token`, jednorazowość kodu
+autoryzacyjnego (replay odrzucony przez `consumeAuthCode`), wygasły kod,
+`email_verified`/`ALLOWED_EMAIL` (`googleIdentity`), limity `listTree`/
+`search` (`truncated`), każda operacja zapisu odrzucona przy
+`WRITE_ENABLED=false`, nieznana operacja Apps Script, `assertDescendant_`
+dla pliku spoza `ROOT_FOLDER_ID`, rate limiting (`429` + `Retry-After`).
 
 Zasada kluczowa: testy weryfikują **realne** funkcje `apps-script/Code.gs`
-(ładowane do Node przez `vm`), a nie ich kopię — dzięki temu podpis tworzony
-przez MCP (Web Crypto) jest faktycznie akceptowany przez adapter.
+(ładowane do Node przez `vm`, z w pełni podstawionym fałszywym
+DriveApp/PropertiesService/CacheService/LockService/Utilities — patrz
+`test/helpers/appsScript.ts`) oraz **realne** handlery Next.js (importowane
+bezpośrednio i wywoływane z prawdziwym obiektem `Request`) — nie ich kopie.
+Wyjątek: pełna weryfikacja `id_token` przez JWKS Google w `/oauth/callback`
+nie jest testowana na poziomie HTTP (jose na Node pobiera JWKS przez
+`node:https`, z pominięciem globalnego `fetch`, więc nie da się tego
+sensownie zamockować) — logika PO weryfikacji podpisu jest wydzielona do
+`lib/auth/googleIdentity.ts` i tam w pełni testowana.

@@ -93,6 +93,14 @@ W Vercelu: **Project → Settings → Environment Variables**. Dodaj poniższe d
 Nie ustawiaj `HELIOS_WRITE_ENABLED` (albo zostaw `false`) — zapis włączymy
 później.
 
+**Opcjonalnie** (obrona w głąb): `ALLOWED_OAUTH_REDIRECT_URIS` — dokładna
+allowlista redirect_uri klientów OAuth, rozdzielona przecinkami. Zostaw
+puste, dopóki nie znasz rzeczywistego redirect_uri Twojego klienta MCP —
+zobaczysz go w praktyce dopiero przy pierwszym logowaniu (Krok 8/9). Główną
+obroną jest i tak obowiązkowy **ekran zgody** (patrz Krok 8 poniżej). Po
+poznaniu realnego redirect_uri możesz go dopisać do tej listy, żeby zawęzić
+akceptowane rejestracje DCR — patrz `.env.example` po szczegóły formatu.
+
 ## Krok 4 — Import repozytorium GitHub
 
 1. Wejdź na <https://vercel.com/new> i zaloguj się przez GitHub.
@@ -129,9 +137,15 @@ URI o adres produkcyjny.
 1. W Claude: **Settings → Connectors → Add custom connector** (lub „Add MCP
    server").
 2. Podaj adres: `https://TWOJ-PROJEKT.vercel.app/api/mcp`.
-3. Claude przeprowadzi logowanie Google. Zaloguj się kontem z `ALLOWED_EMAIL`.
-4. Zapytaj: „Jaki jest status Heliosa?" — powinno zadziałać `helios_status`.
-5. Sprawdź, że **inne** konto Google zostaje odrzucone.
+3. Zobaczysz nasz **ekran zgody** („Żądanie dostępu") — pokazuje nazwę
+   klienta i host, do którego wrócisz po zalogowaniu. Kliknij **Zezwól**
+   tylko jeśli sam(a) zainicjowałeś(aś) to logowanie w zaufanej aplikacji.
+4. Dopiero po kliknięciu „Zezwól" nastąpi przekierowanie do logowania Google.
+   Zaloguj się kontem z `ALLOWED_EMAIL`.
+5. Zapytaj: „Jaki jest status Heliosa?" — powinno zadziałać `helios_status`.
+6. Sprawdź, że **inne** konto Google zostaje odrzucone.
+7. Kliknij **Odrzuć** na ekranie zgody przy kolejnej próbie i sprawdź, że
+   logowanie kończy się bez dostępu (bez przekierowania do Google).
 
 ## Krok 9 — Test w ChatGPT
 
@@ -180,19 +194,52 @@ Po każdej zmianie wdróż ponownie i wykonaj Krok 8–9.
 
 ```bash
 npm install
-npm test          # testy bezpieczeństwa (node:test + tsx)
-npm run typecheck # kontrola typów lib + testów
-npm run dev       # uruchomienie lokalne (wymaga .env.local)
+npm test              # testy bezpieczeństwa (node:test + tsx)
+npm run typecheck     # kontrola typów lib + testów + endpointów API
+npm run typecheck:app # kontrola typów całej aplikacji Next.js
+npm run dev           # uruchomienie lokalne (wymaga .env.local)
 ```
+
+Znana, nieistotna dla tej aplikacji podatność tranzytywna: `postcss@8.4.31`
+(wektorowana przez `next`) ma zgłoszony XSS w stringifikacji CSS
+(`GHSA-qx2v-qp2m-jg93`). Ta aplikacja nie ma żadnego pipeline'u przetwarzania
+CSS pochodzącego od użytkownika, więc nie ma tu realnej ścieżki ataku.
+Najnowsza stabilna gałąź `next@15.x` (`15.5.20`) nadal wektorowa tę samą
+wersję `postcss` — nie ma bezpiecznej, nie-przełomowej aktualizacji w obrębie
+`next@^15`; sugerowany przez `npm audit fix --force` downgrade do
+`next@9.3.3` byłby znacznie gorszy i nie został zastosowany.
 
 Szczegóły architektury i decyzji: [`docs/PLAN.md`](docs/PLAN.md).
 
 ## Bezpieczeństwo w skrócie
 
 - Dostęp tylko dla `ALLOWED_EMAIL`; inne konta odrzucane.
+- **Ekran zgody** na `/oauth/authorize` — zawsze pokazuje nazwę klienta OAuth
+  i host redirect_uri, zanim rozpocznie się logowanie Google. Kod
+  autoryzacyjny NIGDY nie jest wydawany bez świadomego kliknięcia „Zezwól".
+  Formularz zgody chroniony przed CSRF (double-submit cookie).
+- Opcjonalna allowlista `ALLOWED_OAUTH_REDIRECT_URIS` (dokładne dopasowanie,
+  fail-closed) jako dodatkowa warstwa obok ekranu zgody.
+- Kod autoryzacyjny jest **jednorazowy**: atomowe zużycie `jti` przez Helios
+  Drive Adapter (Apps Script `LockService` + `PropertiesService`) — druga
+  próba wymiany tego samego kodu jest odrzucana.
 - Każde żądanie do Drive podpisane HMAC-SHA256; ochrona przed powtórzeniem
-  (nonce) i starym znacznikiem czasu (±5 min).
+  (nonce, check-and-set atomowy przez `LockService`) i starym znacznikiem
+  czasu (±5 min).
 - Blokada traversalu, ścieżek absolutnych, `%`, `\`, znaków sterujących.
 - Tylko pliki `.md`, maksymalny zapis 1 MB, obowiązkowy `expectedModifiedTime`.
+- **Limity `listTree`/`search`** chronią przed DoS przez wyliczanie całego
+  Drive: maks. 500 węzłów drzewa (`MAX_TREE_NODES`), maks. 800 przejrzanych
+  plików (`MAX_SEARCH_SCAN`), maks. 200 odczytów treści pliku
+  (`MAX_SEARCH_CONTENT_READS`) — stałe zdefiniowane w `apps-script/Code.gs`.
+  Obcięty wynik ma `truncated: true`.
+- **Rate limiting** (best effort, bez płatnej infrastruktury) na
+  `/oauth/register`, `/oauth/authorize`, `/oauth/token` i `/api/mcp` — zwraca
+  `429` + `Retry-After` po przekroczeniu limitu. Ogranicznik działa w pamięci
+  procesu pojedynczej instancji serverless (Vercel Hobby nie gwarantuje
+  współdzielenia stanu między instancjami) — to warstwa odstraszająca, nie
+  twarda gwarancja globalnego limitu. Klucz limitu to hash (IP + trasa),
+  nigdy jawny e-mail/token; nagłówek `x-forwarded-for` traktowany jako
+  podpowiedź, nie uwierzytelniony fakt.
 - Kopia zapasowa przed każdą zmianą; brak trwałego usuwania i zmian uprawnień.
 - Sekrety wyłącznie w zmiennych środowiskowych; nigdy w repozytorium ani w błędach.
