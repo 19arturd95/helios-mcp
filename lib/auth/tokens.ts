@@ -1,0 +1,249 @@
+/**
+ * Prymitywy OAuth naszego serwera autoryzacji (stateless, `jose`).
+ *
+ * Wszystko jest podpisane HS256 sekretem AUTH_SECRET, dzięki czemu nie
+ * potrzebujemy bazy danych ani Redisa:
+ *  - client_id            → podpisany JWT kodujący redirect_uris (DCR),
+ *  - kod autoryzacyjny    → krótkożyciowy podpisany JWT (~60 s),
+ *  - access token         → podpisany JWT (audience = zasób /api/mcp).
+ *
+ * Każdy typ tokenu ma odrębny `audience`, co blokuje pomylenie tokenów.
+ */
+
+import { SignJWT, jwtVerify } from "jose";
+
+const AUD_CLIENT = "helios:client";
+const AUD_CODE = "helios:auth_code";
+const AUD_STATE = "helios:oauth_state";
+
+function key(authSecret: string): Uint8Array {
+  return new TextEncoder().encode(authSecret);
+}
+
+function nowSeconds(now?: number): number {
+  return now ?? Math.floor(Date.now() / 1000);
+}
+
+// ---------------------------------------------------------------------------
+// base64url + PKCE (S256)
+// ---------------------------------------------------------------------------
+
+function base64UrlFromBytes(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** Weryfikacja PKCE S256: base64url(SHA-256(verifier)) === challenge. */
+export async function verifyPkceS256(codeVerifier: string, codeChallenge: string): Promise<boolean> {
+  if (!codeVerifier || !codeChallenge) return false;
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(codeVerifier));
+  return base64UrlFromBytes(new Uint8Array(digest)) === codeChallenge;
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic Client Registration (stateless client_id)
+// ---------------------------------------------------------------------------
+
+export interface ClientMetadata {
+  redirectUris: string[];
+  clientName?: string;
+}
+
+/** Tworzy client_id (podpisany JWT) kodujący dozwolone redirect_uris. */
+export async function issueClientId(
+  authSecret: string,
+  issuer: string,
+  meta: ClientMetadata,
+): Promise<string> {
+  return await new SignJWT({ redirect_uris: meta.redirectUris, client_name: meta.clientName ?? "" })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuer(issuer)
+    .setAudience(AUD_CLIENT)
+    .setIssuedAt()
+    .sign(key(authSecret));
+}
+
+export async function verifyClientId(
+  authSecret: string,
+  issuer: string,
+  clientId: string,
+): Promise<ClientMetadata> {
+  const { payload } = await jwtVerify(clientId, key(authSecret), {
+    issuer,
+    audience: AUD_CLIENT,
+  });
+  const redirectUris = Array.isArray(payload.redirect_uris)
+    ? (payload.redirect_uris as unknown[]).map(String)
+    : [];
+  return { redirectUris, clientName: typeof payload.client_name === "string" ? payload.client_name : undefined };
+}
+
+// ---------------------------------------------------------------------------
+// Kod autoryzacyjny
+// ---------------------------------------------------------------------------
+
+export interface AuthCodeClaims {
+  email: string;
+  clientId: string;
+  redirectUri: string;
+  codeChallenge: string;
+  scope: string;
+  resource: string;
+}
+
+export async function issueAuthorizationCode(
+  authSecret: string,
+  issuer: string,
+  claims: AuthCodeClaims,
+  ttlSeconds = 60,
+  now?: number,
+): Promise<string> {
+  const iat = nowSeconds(now);
+  return await new SignJWT({
+    email: claims.email,
+    client_id: claims.clientId,
+    redirect_uri: claims.redirectUri,
+    code_challenge: claims.codeChallenge,
+    scope: claims.scope,
+    resource: claims.resource,
+  })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuer(issuer)
+    .setAudience(AUD_CODE)
+    .setIssuedAt(iat)
+    .setExpirationTime(iat + ttlSeconds)
+    .sign(key(authSecret));
+}
+
+export async function verifyAuthorizationCode(
+  authSecret: string,
+  issuer: string,
+  code: string,
+  now?: number,
+): Promise<AuthCodeClaims> {
+  const { payload } = await jwtVerify(code, key(authSecret), {
+    issuer,
+    audience: AUD_CODE,
+    currentDate: now !== undefined ? new Date(now * 1000) : undefined,
+  });
+  return {
+    email: String(payload.email ?? ""),
+    clientId: String(payload.client_id ?? ""),
+    redirectUri: String(payload.redirect_uri ?? ""),
+    codeChallenge: String(payload.code_challenge ?? ""),
+    scope: String(payload.scope ?? ""),
+    resource: String(payload.resource ?? ""),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Stan OAuth przenoszony przez Google (podpisany, krótkożyciowy)
+// ---------------------------------------------------------------------------
+
+export interface OAuthStateClaims {
+  clientId: string;
+  redirectUri: string;
+  codeChallenge: string;
+  scope: string;
+  resource: string;
+  state: string; // oryginalny `state` klienta MCP
+}
+
+export async function issueOAuthState(
+  authSecret: string,
+  issuer: string,
+  claims: OAuthStateClaims,
+  ttlSeconds = 600,
+  now?: number,
+): Promise<string> {
+  const iat = nowSeconds(now);
+  return await new SignJWT({ ...claims })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuer(issuer)
+    .setAudience(AUD_STATE)
+    .setIssuedAt(iat)
+    .setExpirationTime(iat + ttlSeconds)
+    .sign(key(authSecret));
+}
+
+export async function verifyOAuthState(
+  authSecret: string,
+  issuer: string,
+  token: string,
+  now?: number,
+): Promise<OAuthStateClaims> {
+  const { payload } = await jwtVerify(token, key(authSecret), {
+    issuer,
+    audience: AUD_STATE,
+    currentDate: now !== undefined ? new Date(now * 1000) : undefined,
+  });
+  return {
+    clientId: String(payload.clientId ?? ""),
+    redirectUri: String(payload.redirectUri ?? ""),
+    codeChallenge: String(payload.codeChallenge ?? ""),
+    scope: String(payload.scope ?? ""),
+    resource: String(payload.resource ?? ""),
+    state: String(payload.state ?? ""),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Access token
+// ---------------------------------------------------------------------------
+
+export interface AccessTokenParams {
+  authSecret: string;
+  issuer: string;
+  audience: string; // zasób /api/mcp
+  email: string;
+  clientId: string;
+  scope: string;
+  ttlSeconds?: number;
+  now?: number;
+}
+
+export async function issueAccessToken(params: AccessTokenParams): Promise<string> {
+  const iat = nowSeconds(params.now);
+  const ttl = params.ttlSeconds ?? 3600;
+  return await new SignJWT({
+    email: params.email,
+    scope: params.scope,
+    client_id: params.clientId,
+    token_type: "access",
+  })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuer(params.issuer)
+    .setAudience(params.audience)
+    .setSubject(params.email)
+    .setIssuedAt(iat)
+    .setExpirationTime(iat + ttl)
+    .sign(key(params.authSecret));
+}
+
+export interface VerifiedAccessToken {
+  email: string;
+  clientId: string;
+  scope: string;
+  exp?: number;
+}
+
+export async function verifyAccessToken(
+  authSecret: string,
+  issuer: string,
+  audience: string,
+  token: string,
+  now?: number,
+): Promise<VerifiedAccessToken> {
+  const { payload } = await jwtVerify(token, key(authSecret), {
+    issuer,
+    audience,
+    currentDate: now !== undefined ? new Date(now * 1000) : undefined,
+  });
+  return {
+    email: String(payload.email ?? ""),
+    clientId: String(payload.client_id ?? ""),
+    scope: String(payload.scope ?? ""),
+    exp: typeof payload.exp === "number" ? payload.exp : undefined,
+  };
+}
