@@ -1,12 +1,17 @@
 /**
  * Endpoint tokenu (grant_type=authorization_code + PKCE).
  *
- * Weryfikuje nasz kod autoryzacyjny, sprawdza PKCE i wystawia access token
- * (JWT) z audience = zasób /api/mcp. Bez refresh tokenu (krótki TTL).
+ * Weryfikuje nasz kod autoryzacyjny, wymaga zgodności client_id/redirect_uri,
+ * sprawdza PKCE, a następnie ATOMOWO zużywa kod (jednorazowość — patrz
+ * `consumeAuthCode` w Helios Drive Adapter / Code.gs) zanim wystawi access
+ * token (JWT) z audience = zasób /api/mcp. Bez refresh tokenu (krótki TTL).
  */
 
 import { loadConfig, mcpResourceUrl } from "@/lib/config";
 import { issueAccessToken, verifyAuthorizationCode, verifyPkceS256 } from "@/lib/auth/tokens";
+import { callAdapter, DriveAdapterError } from "@/lib/drive/client";
+import type { ConsumeAuthCodeResult } from "@/lib/drive/types";
+import { enforceRateLimit } from "@/lib/security/rateLimit";
 import { corsHeaders, json, oauthError } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
@@ -26,6 +31,9 @@ async function parseBody(req: Request): Promise<Record<string, string>> {
 }
 
 export async function POST(req: Request) {
+  const limited = await enforceRateLimit(req, { name: "oauth_token", limit: 30, windowSeconds: 300 });
+  if (limited) return limited;
+
   const cfg = loadConfig();
   const body = await parseBody(req).catch(() => null);
   if (!body) return oauthError("invalid_request", "Nie udało się odczytać treści żądania.");
@@ -39,6 +47,15 @@ export async function POST(req: Request) {
   const clientId = body.client_id ?? "";
   const redirectUri = body.redirect_uri ?? "";
 
+  // client_id i redirect_uri są obowiązkowe (RFC 6749 §4.1.3 dla klienta
+  // publicznego, który podawał redirect_uri w /oauth/authorize).
+  if (!clientId) {
+    return oauthError("invalid_request", "Wymagane pole client_id.");
+  }
+  if (!redirectUri) {
+    return oauthError("invalid_request", "Wymagane pole redirect_uri.");
+  }
+
   let claims;
   try {
     claims = await verifyAuthorizationCode(cfg.authSecret, cfg.baseUrl, code);
@@ -46,11 +63,16 @@ export async function POST(req: Request) {
     return oauthError("invalid_grant", "Kod autoryzacyjny jest nieprawidłowy lub wygasł.");
   }
 
-  if (clientId && clientId !== claims.clientId) {
+  if (clientId !== claims.clientId) {
     return oauthError("invalid_grant", "client_id nie pasuje do kodu.");
   }
-  if (redirectUri && redirectUri !== claims.redirectUri) {
+  if (redirectUri !== claims.redirectUri) {
     return oauthError("invalid_grant", "redirect_uri nie pasuje do kodu.");
+  }
+  if (!claims.jti) {
+    // Kod bez jti (nie powinno się zdarzyć dla kodów wystawionych przez ten
+    // serwer) — odrzucamy fail-closed, nie potrafimy zagwarantować jednorazowości.
+    return oauthError("invalid_grant", "Kod autoryzacyjny jest nieprawidłowy.");
   }
 
   const pkceOk = await verifyPkceS256(codeVerifier, claims.codeChallenge);
@@ -61,6 +83,27 @@ export async function POST(req: Request) {
   // Obrona w głąb: e-mail nadal musi być dozwolony.
   if (claims.email.trim().toLowerCase() !== cfg.allowedEmail) {
     return oauthError("access_denied", "Konto nie ma uprawnień.", 403);
+  }
+
+  // Jednorazowość kodu: atomowe zużycie `jti` przez Helios Drive Adapter
+  // (Apps Script LockService + PropertiesService). Awaria adaptera → odmowa
+  // (nie możemy zagwarantować braku powtórnego użycia, więc bezpieczniej
+  // odrzucić niż zaryzykować replay).
+  try {
+    const consumed = await callAdapter<ConsumeAuthCodeResult>(
+      { appsScriptUrl: cfg.appsScriptUrl, appsScriptSecret: cfg.appsScriptSecret },
+      "consumeAuthCode",
+      { jti: claims.jti, exp: claims.exp },
+    );
+    if (!consumed.consumed) {
+      return oauthError("invalid_grant", "Kod autoryzacyjny został już wykorzystany.");
+    }
+  } catch (err) {
+    const detail = err instanceof DriveAdapterError ? err.message : "Błąd wewnętrzny.";
+    return json(
+      { error: "temporarily_unavailable", error_description: `Nie udało się zweryfikować jednorazowości kodu (${detail}). Spróbuj ponownie.` },
+      503,
+    );
   }
 
   const accessToken = await issueAccessToken({

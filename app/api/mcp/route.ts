@@ -12,6 +12,7 @@ import { verifyMcpBearer, type McpAuthInfo } from "@/lib/auth/verifyToken";
 import { makeToolContext, type ToolContext } from "@/lib/tools/handlers";
 import * as H from "@/lib/tools/handlers";
 import * as S from "@/lib/tools/schemas";
+import { enforceRateLimit } from "@/lib/security/rateLimit";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -104,4 +105,13 @@ const authHandler = withMcpAuth(
   },
 );
 
-export { authHandler as GET, authHandler as POST, authHandler as DELETE };
+// Rate limiting best-effort (patrz lib/security/rateLimit.ts) PRZED
+// weryfikacją tokenu — ogranicza też próby zgadywania/nadużywania bearer
+// tokenów, nie tylko ruch już uwierzytelniony.
+async function rateLimitedHandler(req: Request): Promise<Response> {
+  const limited = await enforceRateLimit(req, { name: "api_mcp", limit: 60, windowSeconds: 60 });
+  if (limited) return limited;
+  return authHandler(req);
+}
+
+export { rateLimitedHandler as GET, rateLimitedHandler as POST, rateLimitedHandler as DELETE };

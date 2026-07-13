@@ -9,6 +9,7 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { loadConfig } from "@/lib/config";
 import { issueAuthorizationCode, verifyOAuthState } from "@/lib/auth/tokens";
+import { evaluateGoogleIdentity } from "@/lib/auth/googleIdentity";
 import { htmlError } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
@@ -62,22 +63,23 @@ export async function GET(req: Request) {
     return htmlError("Błąd logowania", "Brak id_token w odpowiedzi Google.");
   }
 
-  // Weryfikacja id_token i odczyt e-maila.
-  let email = "";
-  let emailVerified = false;
+  // Weryfikacja id_token (podpis/issuer/audience przez JWKS Google).
+  let payload: Record<string, unknown>;
   try {
-    const { payload } = await jwtVerify(idToken, GOOGLE_JWKS, {
+    const verified = await jwtVerify(idToken, GOOGLE_JWKS, {
       issuer: ["https://accounts.google.com", "accounts.google.com"],
       audience: cfg.googleClientId,
     });
-    email = String(payload.email ?? "").toLowerCase();
-    emailVerified = payload.email_verified === true;
+    payload = verified.payload;
   } catch {
     return htmlError("Błąd logowania", "Nie udało się zweryfikować tożsamości Google.");
   }
 
-  if (!email || !emailVerified || email !== cfg.allowedEmail) {
-    // Odmowa dla każdego innego konta.
+  // Ocena tożsamości (e-mail zweryfikowany + zgodny z ALLOWED_EMAIL) — logika
+  // wydzielona do lib/auth/googleIdentity.ts, testowalna bez sieci/JWKS.
+  const identity = evaluateGoogleIdentity(payload, cfg.allowedEmail);
+  if (!identity.allowed) {
+    // Odmowa dla każdego innego konta (lub email_verified=false).
     return htmlError(
       "Brak dostępu",
       "To konto Google nie ma uprawnień do tego serwera Helios.",
@@ -87,7 +89,7 @@ export async function GET(req: Request) {
 
   // Wystaw NASZ kod autoryzacyjny i wróć do klienta MCP.
   const authCode = await issueAuthorizationCode(cfg.authSecret, cfg.baseUrl, {
-    email,
+    email: identity.email,
     clientId: st.clientId,
     redirectUri: st.redirectUri,
     codeChallenge: st.codeChallenge,
@@ -98,5 +100,10 @@ export async function GET(req: Request) {
   const redirect = new URL(st.redirectUri);
   redirect.searchParams.set("code", authCode);
   if (st.state) redirect.searchParams.set("state", st.state);
-  return Response.redirect(redirect.toString(), 302);
+  // Kod autoryzacyjny trafia do query string przekierowania — no-store
+  // zapobiega jego zapisaniu przez pośredniczące cache'e/proxy.
+  return new Response(null, {
+    status: 302,
+    headers: { location: redirect.toString(), "cache-control": "no-store" },
+  });
 }

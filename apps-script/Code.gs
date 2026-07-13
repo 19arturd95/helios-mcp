@@ -12,12 +12,21 @@
  *
  * Zasady bezpieczeństwa:
  *   - odrzuca żądania starsze niż 5 minut (okno ±300 s),
- *   - odrzuca ponownie użyte nonce (CacheService),
+ *   - odrzuca ponownie użyte nonce (CacheService, check-and-set atomowy przez LockService),
  *   - odrzuca nieprawidłowy podpis HMAC (porównanie w czasie stałym),
  *   - blokuje ścieżki absolutne, "..", traversal, "%", "\", znaki sterujące,
  *   - domyślnie tylko pliki .md, maksymalny zapis 1 MB,
+ *   - limity listTree/search (liczba węzłów, liczba odczytów treści, liczba wyników),
  *   - nie loguje treści notatek, nie zwraca sekretów w błędach,
  *   - brak trwałego usuwania, brak zmian uprawnień, brak udostępniania.
+ *
+ * `consumeAuthCode` — jednorazowe zużycie kodu autoryzacyjnego OAuth (MCP):
+ * atomowy check-and-set przez LockService + PropertiesService (przechowuje
+ * WYŁĄCZNIE jti + czas wygaśnięcia, nigdy sam kod/token). To stan bezpieczeństwa
+ * OAuth, niezależny od `WRITE_ENABLED` — działa nawet gdy zapis notatek jest
+ * wyłączony. CacheService/PropertiesService wystarczają dla modelu ryzyka Fazy 1
+ * (pojedynczy użytkownik, niski wolumen); Faza 2 (zapis) będzie wymagać
+ * trwalszego mechanizmu idempotencji operacji zapisu (patrz docs/PLAN.md).
  */
 
 var MAX_SKEW_SECONDS = 300;
@@ -26,8 +35,20 @@ var ALLOWED_EXTENSIONS = ['.md'];
 var BACKUPS_DIR = '90 System/Backups';
 var ARCHIVE_INBOX_DIR = '99 Archive/Inbox';
 
+// Limity kosztu listTree/search — chronią przed DoS przez wyliczanie całego Drive.
+var MAX_TREE_NODES = 500;       // maksymalna liczba węzłów (folderów+plików) w drzewie
+var MAX_SEARCH_SCAN = 800;      // maksymalna liczba plików przejrzanych (nazwa) w search
+var MAX_SEARCH_CONTENT_READS = 200; // maksymalna liczba odczytów TREŚCI pliku w search
+// Przybliżony górny limit rozmiaru odpowiedzi JSON (dokumentacyjny — wynika
+// z MAX_TREE_NODES/MAX_SEARCH_SCAN; patrz README → „Limity listTree/search”).
+var MAX_RESPONSE_BYTES = 200 * 1024;
+
 var READ_OPS = { status: true, listTree: true, search: true, read: true };
 var WRITE_OPS = { create: true, update: true, append: true, backup: true, moveToArchive: true };
+// Operacje "meta" (bezpieczeństwo OAuth) — nie dotyczą Drive, nie są gated
+// przez WRITE_ENABLED.
+var META_OPS = { consumeAuthCode: true };
+var AUTH_CODE_PROP_PREFIX = 'authcode:';
 
 // ---------------------------------------------------------------------------
 // Wejście HTTP
@@ -140,11 +161,20 @@ function verifyEnvelope_(envelope, deps) {
   }
 
   // Ochrona przed powtórzeniem — dopiero po weryfikacji podpisu.
+  // Check-and-set musi być atomowy: LockService serializuje równoległe
+  // żądania, żeby dwa wywołania z tym samym nonce nie mogły obie przejść
+  // weryfikacji przed zapisaniem go w cache (TOCTOU).
   var nonceKey = 'nonce:' + nonce;
-  if (deps.cacheGet(nonceKey)) {
-    return { ok: false, error: 'Nonce został już użyty.', code: 'replay' };
+  var lock = LockService.getScriptLock();
+  lock.waitLock(5000);
+  try {
+    if (deps.cacheGet(nonceKey)) {
+      return { ok: false, error: 'Nonce został już użyty.', code: 'replay' };
+    }
+    deps.cachePut(nonceKey, '1', skew * 2);
+  } finally {
+    lock.releaseLock();
   }
-  deps.cachePut(nonceKey, '1', skew * 2);
 
   return { ok: true, payload: payload };
 }
@@ -295,16 +325,70 @@ function assertSize_(content) {
 }
 
 // ---------------------------------------------------------------------------
+// Jednorazowe zużycie kodu autoryzacyjnego OAuth (bezpieczeństwo MCP)
+// ---------------------------------------------------------------------------
+
+/**
+ * Usuwa wygasłe wpisy `authcode:*` z PropertiesService, żeby magazyn nie rósł
+ * bez końca. Tanie przy niskim wolumenie (Faza 1, pojedynczy użytkownik) —
+ * skanuje wszystkie właściwości skryptu przy każdym wywołaniu `consumeAuthCode`.
+ */
+function cleanupExpiredAuthCodes_(props, now) {
+  var all = props.getProperties();
+  for (var key in all) {
+    if (Object.prototype.hasOwnProperty.call(all, key) && key.indexOf(AUTH_CODE_PROP_PREFIX) === 0) {
+      var exp = parseInt(all[key], 10);
+      if (!exp || exp < now) {
+        props.deleteProperty(key);
+      }
+    }
+  }
+}
+
+/**
+ * Atomowo (LockService) sprawdza i oznacza `jti` jako zużyty. Przechowuje
+ * WYŁĄCZNIE jti (losowy, nieodwracalny identyfikator) i czas wygaśnięcia —
+ * nigdy sam kod ani token. Zwraca `{ consumed: true }` przy pierwszym użyciu,
+ * `{ consumed: false }` przy każdym kolejnym (replay).
+ */
+function consumeAuthCode_(props, jti, expSeconds) {
+  if (!jti || typeof jti !== 'string') {
+    throw new Error('Nieprawidłowy jti.');
+  }
+  var lock = LockService.getScriptLock();
+  lock.waitLock(5000);
+  try {
+    var now = Math.floor(Date.now() / 1000);
+    cleanupExpiredAuthCodes_(props, now);
+    var key = AUTH_CODE_PROP_PREFIX + jti;
+    if (props.getProperty(key)) {
+      return { consumed: false };
+    }
+    var exp = parseInt(expSeconds, 10) || (now + 60);
+    props.setProperty(key, String(exp));
+    return { consumed: true };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Dyspozytor operacji
 // ---------------------------------------------------------------------------
 
 function dispatch_(request, props) {
   var op = request && request.op;
-  if (!op || (!READ_OPS[op] && !WRITE_OPS[op])) {
+  if (!op || (!READ_OPS[op] && !WRITE_OPS[op] && !META_OPS[op])) {
     throw new Error('Nieznana operacja.');
   }
   if (WRITE_OPS[op] && !writeEnabled_(props)) {
     throw new Error('Operacje zapisu są wyłączone (Faza 1).');
+  }
+  if (META_OPS[op]) {
+    switch (op) {
+      case 'consumeAuthCode': return consumeAuthCode_(props, request.jti, request.exp);
+      default: throw new Error('Nieobsługiwana operacja.');
+    }
   }
   var root = getRoot_(props);
   var rootId = root.getId();
@@ -333,7 +417,14 @@ function opStatus_(root, props) {
   };
 }
 
-function buildTree_(folder, basePath, depth, maxDepth) {
+/**
+ * `counter` jest współdzielonym obiektem { count, truncated } przekazywanym
+ * przez całą rekurencję — pozwala twardo ograniczyć CAŁKOWITĄ liczbę węzłów
+ * (nie tylko głębokość) i uciąć budowanie drzewa, gdy limit zostanie osiągnięty.
+ * Bez tego pojedyncze żądanie mogłoby wyliczyć całe Drive.
+ */
+function buildTree_(folder, basePath, depth, maxDepth, counter) {
+  counter.count++;
   var node = {
     path: basePath,
     name: folder.getName(),
@@ -341,15 +432,28 @@ function buildTree_(folder, basePath, depth, maxDepth) {
     id: folder.getId(),
     children: []
   };
+  if (counter.count >= MAX_TREE_NODES) {
+    counter.truncated = true;
+    return node;
+  }
   if (depth >= maxDepth) return node;
   var folders = folder.getFolders();
   while (folders.hasNext()) {
+    if (counter.count >= MAX_TREE_NODES) {
+      counter.truncated = true;
+      break;
+    }
     var sub = folders.next();
-    node.children.push(buildTree_(sub, basePath ? basePath + '/' + sub.getName() : sub.getName(), depth + 1, maxDepth));
+    node.children.push(buildTree_(sub, basePath ? basePath + '/' + sub.getName() : sub.getName(), depth + 1, maxDepth, counter));
   }
   var files = folder.getFiles();
   while (files.hasNext()) {
+    if (counter.count >= MAX_TREE_NODES) {
+      counter.truncated = true;
+      break;
+    }
     var f = files.next();
+    counter.count++;
     node.children.push({
       path: basePath ? basePath + '/' + f.getName() : f.getName(),
       name: f.getName(),
@@ -371,29 +475,40 @@ function opListTree_(root, request) {
     if (!startFolder) throw new Error('Folder nie istnieje.');
     basePath = safe;
   }
-  return { root: buildTree_(startFolder, basePath, 0, maxDepth) };
+  var counter = { count: 0, truncated: false };
+  var tree = buildTree_(startFolder, basePath, 0, maxDepth, counter);
+  return { root: tree, truncated: counter.truncated === true };
 }
 
 function opSearch_(root, request) {
   var query = String(request.query || '').toLowerCase();
   var limit = Math.min(Math.max(parseInt(request.limit, 10) || 10, 1), 50);
-  if (!query) return { query: request.query || '', hits: [] };
+  if (!query) return { query: request.query || '', hits: [], truncated: false };
 
   var hits = [];
   var scanned = 0;
-  var MAX_SCAN = 800;
+  var contentReads = 0;
+  var truncated = false;
+
+  function budgetExhausted() {
+    return hits.length >= limit || scanned >= MAX_SEARCH_SCAN || contentReads >= MAX_SEARCH_CONTENT_READS;
+  }
 
   function walk(folder, basePath) {
-    if (hits.length >= limit || scanned >= MAX_SCAN) return;
+    if (budgetExhausted()) {
+      if (scanned >= MAX_SEARCH_SCAN || contentReads >= MAX_SEARCH_CONTENT_READS) truncated = true;
+      return;
+    }
     var files = folder.getFiles();
-    while (files.hasNext() && hits.length < limit && scanned < MAX_SCAN) {
+    while (files.hasNext() && !budgetExhausted()) {
       var f = files.next();
       scanned++;
       var name = f.getName();
       var path = basePath ? basePath + '/' + name : name;
       var matched = name.toLowerCase().indexOf(query) !== -1;
       var snippet = undefined;
-      if (!matched && /\.md$/i.test(name)) {
+      if (!matched && /\.md$/i.test(name) && contentReads < MAX_SEARCH_CONTENT_READS) {
+        contentReads++;
         var content = f.getBlob().getDataAsString();
         var idx = content.toLowerCase().indexOf(query);
         if (idx !== -1) {
@@ -406,15 +521,16 @@ function opSearch_(root, request) {
         hits.push({ path: path, id: f.getId(), name: name, modifiedTime: f.getLastUpdated().toISOString(), snippet: snippet });
       }
     }
+    if (scanned >= MAX_SEARCH_SCAN || contentReads >= MAX_SEARCH_CONTENT_READS) truncated = true;
     var folders = folder.getFolders();
-    while (folders.hasNext() && hits.length < limit && scanned < MAX_SCAN) {
+    while (folders.hasNext() && !budgetExhausted()) {
       var sub = folders.next();
       walk(sub, basePath ? basePath + '/' + sub.getName() : sub.getName());
     }
   }
 
   walk(root, '');
-  return { query: request.query || '', hits: hits };
+  return { query: request.query || '', hits: hits, truncated: truncated };
 }
 
 function opRead_(root, rootId, request) {
@@ -510,6 +626,29 @@ if (typeof module !== 'undefined' && module.exports) {
     verifyEnvelope_: verifyEnvelope_,
     canonicalString_: canonicalString_,
     constantTimeEqual_: constantTimeEqual_,
-    pathSafe_: pathSafe_
+    pathSafe_: pathSafe_,
+    dispatch_: dispatch_,
+    doPost: doPost,
+    doGet: doGet,
+    opStatus_: opStatus_,
+    opListTree_: opListTree_,
+    opSearch_: opSearch_,
+    opRead_: opRead_,
+    opCreate_: opCreate_,
+    opUpdate_: opUpdate_,
+    opAppend_: opAppend_,
+    opBackup_: opBackup_,
+    opMoveToArchive_: opMoveToArchive_,
+    assertDescendant_: assertDescendant_,
+    writeEnabled_: writeEnabled_,
+    getRoot_: getRoot_,
+    consumeAuthCode_: consumeAuthCode_,
+    cleanupExpiredAuthCodes_: cleanupExpiredAuthCodes_,
+    MAX_TREE_NODES: MAX_TREE_NODES,
+    MAX_SEARCH_SCAN: MAX_SEARCH_SCAN,
+    MAX_SEARCH_CONTENT_READS: MAX_SEARCH_CONTENT_READS,
+    READ_OPS: READ_OPS,
+    WRITE_OPS: WRITE_OPS,
+    META_OPS: META_OPS
   };
 }

@@ -11,10 +11,12 @@
  */
 
 import { SignJWT, jwtVerify } from "jose";
+import { randomNonce } from "../security/signing.js";
 
 const AUD_CLIENT = "helios:client";
 const AUD_CODE = "helios:auth_code";
 const AUD_STATE = "helios:oauth_state";
+const AUD_CONSENT = "helios:consent";
 
 function key(authSecret: string): Uint8Array {
   return new TextEncoder().encode(authSecret);
@@ -50,17 +52,24 @@ export interface ClientMetadata {
   clientName?: string;
 }
 
-/** Tworzy client_id (podpisany JWT) kodujący dozwolone redirect_uris. */
+/** TTL domyślny rejestracji DCR (client_id). Po tym czasie klient musi się zarejestrować ponownie. */
+export const CLIENT_ID_TTL_SECONDS = 30 * 24 * 3600; // 30 dni
+
+/** Tworzy client_id (podpisany JWT) kodujący dozwolone redirect_uris. Ma `exp` — wygasłe rejestracje są odrzucane. */
 export async function issueClientId(
   authSecret: string,
   issuer: string,
   meta: ClientMetadata,
+  ttlSeconds = CLIENT_ID_TTL_SECONDS,
+  now?: number,
 ): Promise<string> {
+  const iat = nowSeconds(now);
   return await new SignJWT({ redirect_uris: meta.redirectUris, client_name: meta.clientName ?? "" })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuer(issuer)
     .setAudience(AUD_CLIENT)
-    .setIssuedAt()
+    .setIssuedAt(iat)
+    .setExpirationTime(iat + ttlSeconds)
     .sign(key(authSecret));
 }
 
@@ -68,10 +77,12 @@ export async function verifyClientId(
   authSecret: string,
   issuer: string,
   clientId: string,
+  now?: number,
 ): Promise<ClientMetadata> {
   const { payload } = await jwtVerify(clientId, key(authSecret), {
     issuer,
     audience: AUD_CLIENT,
+    currentDate: now !== undefined ? new Date(now * 1000) : undefined,
   });
   const redirectUris = Array.isArray(payload.redirect_uris)
     ? (payload.redirect_uris as unknown[]).map(String)
@@ -90,6 +101,17 @@ export interface AuthCodeClaims {
   codeChallenge: string;
   scope: string;
   resource: string;
+}
+
+/**
+ * Kod autoryzacyjny zweryfikowany + jego `jti` (jednorazowy identyfikator)
+ * i `exp`. `jti` jest przekazywany do Helios Drive Adapter (Apps Script),
+ * który atomowo (LockService) oznacza go jako zużyty — dzięki temu ten sam
+ * kod nie może zostać wymieniony dwukrotnie (patrz `/oauth/token`).
+ */
+export interface VerifiedAuthCodeClaims extends AuthCodeClaims {
+  jti: string;
+  exp: number;
 }
 
 export async function issueAuthorizationCode(
@@ -111,6 +133,7 @@ export async function issueAuthorizationCode(
     .setProtectedHeader({ alg: "HS256" })
     .setIssuer(issuer)
     .setAudience(AUD_CODE)
+    .setJti(randomNonce())
     .setIssuedAt(iat)
     .setExpirationTime(iat + ttlSeconds)
     .sign(key(authSecret));
@@ -121,7 +144,7 @@ export async function verifyAuthorizationCode(
   issuer: string,
   code: string,
   now?: number,
-): Promise<AuthCodeClaims> {
+): Promise<VerifiedAuthCodeClaims> {
   const { payload } = await jwtVerify(code, key(authSecret), {
     issuer,
     audience: AUD_CODE,
@@ -134,6 +157,8 @@ export async function verifyAuthorizationCode(
     codeChallenge: String(payload.code_challenge ?? ""),
     scope: String(payload.scope ?? ""),
     resource: String(payload.resource ?? ""),
+    jti: String(payload.jti ?? ""),
+    exp: typeof payload.exp === "number" ? payload.exp : 0,
   };
 }
 
@@ -180,6 +205,65 @@ export async function verifyOAuthState(
   });
   return {
     clientId: String(payload.clientId ?? ""),
+    redirectUri: String(payload.redirectUri ?? ""),
+    codeChallenge: String(payload.codeChallenge ?? ""),
+    scope: String(payload.scope ?? ""),
+    resource: String(payload.resource ?? ""),
+    state: String(payload.state ?? ""),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Stan zgody użytkownika (ekran /oauth/authorize → POST /oauth/consent)
+// ---------------------------------------------------------------------------
+
+/**
+ * Krótkożyciowy, podpisany token niosący dane potrzebne do wyrenderowania
+ * ekranu zgody i — po kliknięciu „Zezwól” — do rozpoczęcia logowania Google.
+ * Podpis (`AUD_CONSENT`) uniemożliwia modyfikację (np. podmianę redirect_uri
+ * czy nazwy klienta) bez unieważnienia tokenu.
+ */
+export interface ConsentClaims {
+  clientId: string;
+  clientName: string;
+  redirectUri: string;
+  codeChallenge: string;
+  scope: string;
+  resource: string;
+  state: string;
+}
+
+export async function issueConsentToken(
+  authSecret: string,
+  issuer: string,
+  claims: ConsentClaims,
+  ttlSeconds = 300,
+  now?: number,
+): Promise<string> {
+  const iat = nowSeconds(now);
+  return await new SignJWT({ ...claims })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuer(issuer)
+    .setAudience(AUD_CONSENT)
+    .setIssuedAt(iat)
+    .setExpirationTime(iat + ttlSeconds)
+    .sign(key(authSecret));
+}
+
+export async function verifyConsentToken(
+  authSecret: string,
+  issuer: string,
+  token: string,
+  now?: number,
+): Promise<ConsentClaims> {
+  const { payload } = await jwtVerify(token, key(authSecret), {
+    issuer,
+    audience: AUD_CONSENT,
+    currentDate: now !== undefined ? new Date(now * 1000) : undefined,
+  });
+  return {
+    clientId: String(payload.clientId ?? ""),
+    clientName: String(payload.clientName ?? ""),
     redirectUri: String(payload.redirectUri ?? ""),
     codeChallenge: String(payload.codeChallenge ?? ""),
     scope: String(payload.scope ?? ""),

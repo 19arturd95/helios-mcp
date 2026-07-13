@@ -2,10 +2,21 @@
 
 export type ReadOnlyOp = "status" | "listTree" | "search" | "read";
 export type WriteOp = "create" | "update" | "append" | "backup" | "moveToArchive";
-export type AdapterOp = ReadOnlyOp | WriteOp;
+/**
+ * Operacje "meta" — nie dotyczą Google Drive i nie są gated przez
+ * `WRITE_ENABLED` (to stan bezpieczeństwa OAuth, nie zapis notatek).
+ */
+export type SecurityOp = "consumeAuthCode";
+export type AdapterOp = ReadOnlyOp | WriteOp | SecurityOp;
 
 export const READ_ONLY_OPS: ReadOnlyOp[] = ["status", "listTree", "search", "read"];
 export const WRITE_OPS: WriteOp[] = ["create", "update", "append", "backup", "moveToArchive"];
+export const SECURITY_OPS: SecurityOp[] = ["consumeAuthCode"];
+
+/** Wynik jednorazowego zużycia kodu autoryzacyjnego (patrz `consumeAuthCode_` w Code.gs). */
+export interface ConsumeAuthCodeResult {
+  consumed: boolean;
+}
 
 /** Metadane pliku zwracane przez adapter. */
 export interface FileMeta {
@@ -54,10 +65,14 @@ export interface SearchHit {
 export interface SearchResult {
   query: string;
   hits: SearchHit[];
+  /** `true`, gdy wynik został obcięty limitem kosztu (skan/odczyty treści). */
+  truncated?: boolean;
 }
 
 export interface ListTreeResult {
   root: TreeNode;
+  /** `true`, gdy drzewo zostało obcięte limitem liczby węzłów (`MAX_TREE_NODES`). */
+  truncated?: boolean;
 }
 
 /** Ujednolicona odpowiedź adaptera. */

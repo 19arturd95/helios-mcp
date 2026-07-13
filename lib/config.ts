@@ -6,6 +6,8 @@
  *  - Komunikaty błędów NIGDY nie zawierają wartości sekretów — tylko ich nazwy.
  */
 
+import { parseRedirectAllowlist } from "./security/redirect.js";
+
 export interface HeliosConfig {
   /** Jedyny dozwolony adres e-mail (Google). */
   allowedEmail: string;
@@ -23,6 +25,20 @@ export interface HeliosConfig {
   googleClientSecret: string;
   /** Czy Faza 2 (zapis) jest włączona. Domyślnie false. */
   writeEnabled: boolean;
+  /**
+   * Opcjonalna, dokładna allowlista redirect_uri klientów OAuth
+   * (`ALLOWED_OAUTH_REDIRECT_URIS`, rozdzielona przecinkami). Gdy ustawiona,
+   * DCR i /oauth/authorize odrzucają każdy redirect_uri spoza tej listy
+   * (fail-closed, bez wildcardów). Główną obroną przed nadużyciem otwartego
+   * DCR pozostaje ekran zgody — ta allowlista to dodatkowa warstwa.
+   */
+  allowedRedirectUris?: string[];
+  /**
+   * Czy zezwolić na `http://localhost` / `http://127.0.0.1` jako redirect_uri.
+   * Prawda tylko poza `NODE_ENV=production` (Vercel zawsze ustawia
+   * `production` — zarówno dla Preview, jak i Production).
+   */
+  allowLocalhostRedirect: boolean;
 }
 
 /** Kanoniczny identyfikator zasobu MCP (audience tokenów OAuth). */
@@ -70,6 +86,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     googleClientId: env.GOOGLE_CLIENT_ID!.trim(),
     googleClientSecret: env.GOOGLE_CLIENT_SECRET!.trim(),
     writeEnabled: (env.HELIOS_WRITE_ENABLED ?? "false").trim().toLowerCase() === "true",
+    allowedRedirectUris: parseRedirectAllowlist(env.ALLOWED_OAUTH_REDIRECT_URIS),
+    allowLocalhostRedirect: (env.NODE_ENV ?? "development") !== "production",
   };
 }
 
