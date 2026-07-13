@@ -10,6 +10,8 @@ export function testConfig(overrides: Partial<HeliosConfig> = {}): HeliosConfig 
     googleClientId: "client-id.apps.googleusercontent.com",
     googleClientSecret: "google-client-secret-value",
     writeEnabled: false,
+    allowedRedirectUris: undefined,
+    allowLocalhostRedirect: true,
     ...overrides,
   };
 }
