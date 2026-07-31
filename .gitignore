@@ -1,0 +1,39 @@
+# zależności
+/node_modules
+/.pnp
+.pnp.js
+
+# Next.js
+/.next/
+/out/
+next-env.d.ts
+
+# produkcja
+/build
+
+# sekrety i środowisko — NIGDY nie commitować
+.env
+.env.*
+!.env.example
+
+# logi
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# system / edytory
+.DS_Store
+*.pem
+.vscode/
+.idea/
+.vercel
+
+# testy / cache
+coverage/
+.tsbuildinfo
+*.tsbuildinfo
+
+# clasp (opcjonalnie, gdyby ktoś wgrywał Apps Script z CLI)
+apps-script/.clasp.json
+apps-script/appsscript.json.bak

@@ -1,0 +1,21 @@
+{
+  "//": "Typecheck framework-agnostic modules (lib + test + API routes) without requiring the Next.js plugin. Used by `npm run typecheck`.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "types": ["node"],
+    "paths": {
+      "@/*": ["./*"]
+    }
+  },
+  "include": ["lib/**/*.ts", "test/**/*.ts", "app/**/*.ts"]
+}
