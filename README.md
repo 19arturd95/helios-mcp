@@ -1,16 +1,27 @@
 # Helios MCP
 
-Prywatny, zdalny serwer **MCP** dla Twojej osobistej bazy wiedzy **Helios**.
-Pozwala asystentom (Claude, ChatGPT) czytać Twoje notatki i — w Fazie 2 —
-zapisywać nowe. Notatki **pozostają wyłącznie na Twoim Google Drive**. Ten
-serwer niczego nie przechowuje: ani treści notatek, ani ich kopii.
+Prywatny, zdalny serwer **MCP** dla osobistej bazy wiedzy **Helios**.
+Faza 1 pozwala klientom MCP czytać i przeszukiwać notatki. Nie zawiera
+narzędzi ani operacji zapisu notatek. Notatki **pozostają wyłącznie na Google
+Drive**. Serwer nie przechowuje ich treści ani kopii.
 
 ```
 ChatGPT / Claude  →  Helios MCP (Vercel)  →  Helios Drive Adapter (Apps Script)  →  Google Drive
 ```
 
-- **Faza 1 (teraz): tylko odczyt.** 7 narzędzi do czytania i przeszukiwania.
-- **Faza 2 (osobny pull request, po testach): zapis.** Włączana świadomie.
+- **Faza 1 (ten PR): tylko odczyt.** 7 narzędzi do czytania i przeszukiwania.
+- **Faza 2 (osobny, przyszły PR): zapis.** Kod zapisu nie istnieje w Fazie 1.
+
+## Stan weryfikacji Fazy 1
+
+- produkcyjny build Next.js przechodzi bez sekretów i zmiennych środowiskowych,
+- testy lokalne: 100/100, bez pominiętych testów,
+- oba typechecki przechodzą,
+- CI dla pull requestów wykonuje `npm ci`, testy, oba typechecki i build,
+- `npm audit --omit=dev`: 5 podatności, 3 umiarkowane i 2 wysokie. Ocena
+  osiągalności znajduje się w sekcji „Pozostałe ryzyka zależności”,
+- nie wykonano wdrożenia ani pełnych testów E2E OAuth z Google, Claude lub
+  ChatGPT. To osobny etap po decyzji o Vercel Preview.
 
 > Ten dokument jest napisany dla osoby nietechnicznej. Wykonuj kroki po kolei.
 > Wszędzie, gdzie widzisz `TWOJE-...`, wstaw własną wartość.
@@ -48,8 +59,10 @@ Nie używamy płatnego magazynu, Redisa ani AI Gateway. Nic nie wymaga karty.
 6. Skopiuj **URL aplikacji internetowej** (kończy się na `/exec`). To będzie
    `APPS_SCRIPT_URL`.
 
-> Zapis w adapterze jest domyślnie **wyłączony**. Dopóki nie ustawisz
-> właściwości `WRITE_ENABLED = true`, adapter odmawia wszelkich zmian na Drive.
+> Adapter Fazy 1 nie implementuje `create`, `update`, `append`, `backup` ani
+> `moveToArchive`. Właściwość `WRITE_ENABLED` nie jest obsługiwana i nie może
+> włączyć zapisu. `consumeAuthCode` zapisuje wyłącznie stan jednorazowości kodu
+> OAuth w Script Properties. Nie modyfikuje vaulta Helios.
 
 ---
 
@@ -89,9 +102,6 @@ W Vercelu: **Project → Settings → Environment Variables**. Dodaj poniższe d
 | `AUTH_SECRET` | nowy losowy ciąg (`openssl rand -hex 32`) |
 | `GOOGLE_CLIENT_ID` | z Kroku 1 |
 | `GOOGLE_CLIENT_SECRET` | z Kroku 1 |
-
-Nie ustawiaj `HELIOS_WRITE_ENABLED` (albo zostaw `false`) — zapis włączymy
-później.
 
 **Opcjonalnie** (obrona w głąb): `ALLOWED_OAUTH_REDIRECT_URIS` — dokładna
 allowlista redirect_uri klientów OAuth, rozdzielona przecinkami. Zostaw
@@ -154,27 +164,22 @@ URI o adres produkcyjny.
 2. Przejdź logowanie Google tym samym kontem.
 3. Poproś o wyszukanie notatki, aby sprawdzić `helios_search` / `helios_read_note`.
 
-> **Warunek włączenia zapisu:** logowanie i odczyt muszą działać w **Claude
-> ORAZ ChatGPT**. Dopiero wtedy przechodzimy do Fazy 2.
+> **Warunek rozpoczęcia Fazy 2:** logowanie i odczyt muszą działać w **Claude
+> ORAZ ChatGPT**. Dopiero wtedy projektujemy zapis w osobnym PR.
 
-## Krok 10 — Włączenie zapisu (Faza 2)
+## Krok 10 — Faza 2
 
-Zapis dodajemy **osobnym pull requestem** i włączamy w dwóch miejscach:
-
-1. W Apps Script: właściwość skryptu `WRITE_ENABLED = true`.
-2. W Vercelu: zmienna `HELIOS_WRITE_ENABLED = true`.
-
-Zacznij od niewielkiej notatki testowej i sprawdź, że powstaje kopia
-zapasowa w `90 System/Backups`.
+Faza 2 wymaga osobnego projektu zmian i osobnego pull requesta. Musi ponownie
+wprowadzić operacje zapisu wraz z backupem, kontrolą `expectedModifiedTime`,
+idempotencją oraz osobnymi testami bezpieczeństwa. Nie da się jej włączyć
+zmienną środowiskową lub właściwością Apps Script w kodzie Fazy 1.
 
 ## Krok 11 — Rollback (cofnięcie zmian)
 
 - **Kod / wdrożenie:** w Vercelu otwórz **Deployments**, znajdź poprzednie
   działające wdrożenie i kliknij **Promote to Production** (albo **Rollback**).
-- **Notatka:** każda aktualizacja zostawia kopię w `90 System/Backups`.
-  Skopiuj potrzebną wersję z powrotem na miejsce. **Nic nie jest trwale
-  usuwane.**
-- **Awaryjne wyłączenie zapisu:** ustaw `WRITE_ENABLED = false` w Apps Script.
+- **Notatki:** Faza 1 ich nie modyfikuje, więc nie tworzy kopii zapasowych i
+  nie wymaga rollbacku danych.
 
 ## Krok 12 — Rotacja sekretów
 
@@ -193,21 +198,34 @@ Po każdej zmianie wdróż ponownie i wykonaj Krok 8–9.
 ## Dla programisty (opcjonalnie)
 
 ```bash
-npm install
+npm ci
 npm test              # testy bezpieczeństwa (node:test + tsx)
 npm run typecheck     # kontrola typów lib + testów + endpointów API
 npm run typecheck:app # kontrola typów całej aplikacji Next.js
+npm run build         # produkcyjny build Next.js, działa bez sekretów
 npm run dev           # uruchomienie lokalne (wymaga .env.local)
 ```
 
-Znana, nieistotna dla tej aplikacji podatność tranzytywna: `postcss@8.4.31`
-(wektorowana przez `next`) ma zgłoszony XSS w stringifikacji CSS
-(`GHSA-qx2v-qp2m-jg93`). Ta aplikacja nie ma żadnego pipeline'u przetwarzania
-CSS pochodzącego od użytkownika, więc nie ma tu realnej ścieżki ataku.
-Najnowsza stabilna gałąź `next@15.x` (`15.5.20`) nadal wektorowa tę samą
-wersję `postcss` — nie ma bezpiecznej, nie-przełomowej aktualizacji w obrębie
-`next@^15`; sugerowany przez `npm audit fix --force` downgrade do
-`next@9.3.3` byłby znacznie gorszy i nie został zastosowany.
+## Pozostałe ryzyka zależności
+
+Po aktualizacji do `next@15.5.22`, `fast-uri@3.1.5`,
+`@hono/node-server@1.19.17` i bezpiecznego `postcss@8.5.25`, wynik
+`npm audit --omit=dev` zawiera 5 pozycji: 3 umiarkowane i 2 wysokie.
+
+- `@hono/node-server` → `@modelcontextprotocol/sdk` → `mcp-handler`, 3
+  umiarkowane wpisy dotyczą tego samego traversalu w `serve-static` na
+  Windows. Helios jest budowany dla Vercel Linux i nie używa API
+  `serve-static`; pakiet nie występuje w trace żadnej trasy aplikacji. To
+  istotnie ogranicza osiągalność, ale nie jest gwarancją braku ryzyka.
+  Poprawka wskazana przez npm wymaga migracji z `mcp-handler@1.1.0` do 2.x,
+  czyli zmiany major i nowego pakietu serwera MCP. Nie została wykonana bez
+  osobnego testu kompatybilności protokołu.
+- `sharp@0.34.5` i wynikowy wpis `next`, 2 wysokie pozycje, dotyczą podatności
+  libvips. Helios nie używa `next/image` ani nie przetwarza obrazów, ale
+  `sharp` znajduje się w ogólnym trace serwera Next.js, więc nie deklarujemy
+  go jako całkowicie nieosiągalnego. Stabilna poprawka wymaga `sharp@0.35.x`,
+  poza zakresem `^0.34.3` deklarowanym przez Next.js 15.5.22. Wymuszenie
+  nieobsługiwanej wersji albo downgrade Next.js nie zostały zastosowane.
 
 Szczegóły architektury i decyzji: [`docs/PLAN.md`](docs/PLAN.md).
 
@@ -227,7 +245,7 @@ Szczegóły architektury i decyzji: [`docs/PLAN.md`](docs/PLAN.md).
   (nonce, check-and-set atomowy przez `LockService`) i starym znacznikiem
   czasu (±5 min).
 - Blokada traversalu, ścieżek absolutnych, `%`, `\`, znaków sterujących.
-- Tylko pliki `.md`, maksymalny zapis 1 MB, obowiązkowy `expectedModifiedTime`.
+- Odczyt pojedynczej notatki jest ograniczony do ścieżek względnych `.md`.
 - **Limity `listTree`/`search`** chronią przed DoS przez wyliczanie całego
   Drive: maks. 500 węzłów drzewa (`MAX_TREE_NODES`), maks. 800 przejrzanych
   plików (`MAX_SEARCH_SCAN`), maks. 200 odczytów treści pliku
@@ -241,5 +259,6 @@ Szczegóły architektury i decyzji: [`docs/PLAN.md`](docs/PLAN.md).
   twarda gwarancja globalnego limitu. Klucz limitu to hash (IP + trasa),
   nigdy jawny e-mail/token; nagłówek `x-forwarded-for` traktowany jako
   podpowiedź, nie uwierzytelniony fakt.
-- Kopia zapasowa przed każdą zmianą; brak trwałego usuwania i zmian uprawnień.
+- Adapter nie zawiera funkcji zapisu, przenoszenia, usuwania ani zmiany
+  uprawnień plików Helios.
 - Sekrety wyłącznie w zmiennych środowiskowych; nigdy w repozytorium ani w błędach.

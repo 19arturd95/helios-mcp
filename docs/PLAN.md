@@ -71,8 +71,8 @@ nadal bez Redisa i bez bazy danych, zgodnie z planem Hobby.
 
 **Ryzyka:**
 - *Interoperacyjność*: różne klienty MCP bywają wybredne wobec DCR/metadanych.
-  Dlatego **zapis (Faza 2) włączamy dopiero po realnym teście z Claude i
-  ChatGPT** (Krok 8–9 w README).
+  Dlatego **prace nad zapisem w Fazie 2 zaczynamy dopiero po realnym teście z
+  Claude i ChatGPT** (Krok 8–9 w README).
 - *Unieważnianie tokenu*: przy modelu bezstanowym trudniejsze → krótki TTL
   (1 h) i rotacja `AUTH_SECRET` (natychmiast unieważnia wszystkie tokeny).
 - *Brak testu E2E offline*: pełny handshake (w tym weryfikacja `id_token`
@@ -105,9 +105,8 @@ app/
 lib/
   config.ts               # odczyt env, redakcja sekretów, allowlista redirect, tryb dev
   http.ts                 # odpowiedzi + CORS + nagłówki bezpieczeństwa HTML
-  security/paths.ts       # traversal, absolutne, %, \, Unicode NFC, .md, rozmiar 1 MB
+  security/paths.ts       # traversal, absolutne, %, \, Unicode NFC, .md
   security/signing.ts     # postać kanoniczna + HMAC (Web Crypto)
-  security/conflict.ts    # expectedModifiedTime → konflikt
   security/redirect.ts    # allowlista redirect_uri (fail-closed, dokładne dopasowanie)
   security/rateLimit.ts   # rate limiting w pamięci procesu (best effort)
   drive/client.ts         # podpisane żądanie do Apps Script (bez wycieku sekretów)
@@ -119,8 +118,9 @@ lib/
   tools/handlers.ts       # logika 7 narzędzi (czyste funkcje)
   tools/schemas.ts        # walidacja Zod
   tools/constants.ts      # ścieżki struktury Helios
-apps-script/Code.gs       # kompletny adapter; pure-funkcje testowalne w Node;
-                          # limity listTree/search, consumeAuthCode (jednorazowość kodu OAuth)
+apps-script/Code.gs       # adapter tylko do odczytu; limity listTree/search,
+                          # consumeAuthCode (jednorazowość kodu OAuth)
+.github/workflows/ci.yml  # Node 20: npm ci, testy, typechecki, build
 test/                     # testy bezpieczeństwa (node:test + tsx), w tym testy
                           # endpointów OAuth przez bezpośrednie wywołanie route handlerów
 ```
@@ -141,26 +141,19 @@ test/                     # testy bezpieczeństwa (node:test + tsx), w tym testy
 - **Faza 1 (ten kod): tylko odczyt.** Narzędzia: `helios_status`,
   `helios_get_context`, `helios_search`, `helios_read_note`, `helios_list_tree`,
   `helios_inbox_status`, `helios_review_inbox`.
-- **Faza 2 (osobny PR, po testach OAuth): zapis.** Narzędzia:
+- **Faza 2 (osobny PR, po testach OAuth): zapis.** Planowane narzędzia:
   `helios_commit_memory`, `helios_capture_raw`, `helios_apply_inbox_plan`,
-  `helios_create_backup`, `helios_move_to_archive`. Warstwa adaptera i
-  bezpieczeństwa jest już gotowa (walidacja ścieżek, konflikt wersji, kopie),
-  a operacje zapisu są **domyślnie zablokowane** dwoma bezpiecznikami:
-  `HELIOS_WRITE_ENABLED` (MCP) oraz `WRITE_ENABLED` (Apps Script). Ten PR
-  (poprawki po audycie bezpieczeństwa) **niczego tu nie zmienia** — żaden
-  z tych przełączników nie jest dotykany, żadne narzędzie zapisu nie jest
-  rejestrowane w MCP.
-  Przed Fazą 2: mechanizm nonce/CacheService+LockService wystarcza dla
-  odczytu (Faza 1), ale operacje zapisu będą potrzebować trwalszego,
-  dedykowanego mechanizmu idempotencji (analogicznego do `consumeAuthCode`
-  dla kodów OAuth), żeby dwukrotne dostarczenie tego samego żądania zapisu
-  (np. przez retry sieciowy) nie powodowało podwójnego zastosowania zmiany.
+  `helios_create_backup`, `helios_move_to_archive`. Faza 1 nie zawiera ich
+  handlerów, typów ani operacji Apps Script. Nie istnieje przełącznik, który
+  może włączyć zapis. Faza 2 musi osobno wprowadzić backup, kontrolę
+  `expectedModifiedTime`, limity rozmiaru oraz trwałą idempotencję, aby retry
+  sieciowy nie zastosował tej samej zmiany dwukrotnie.
 
 ## 6. Testy bezpieczeństwa (uruchamiane: `npm test`)
 
 Pokryte kategorie: poprawny odczyt, path traversal, zakodowany traversal,
-zapis poza folderem (ścieżka absolutna), konflikt wersji, błędny HMAC, stary
-timestamp, ponowny nonce, zbyt duży zapis, niedozwolone rozszerzenie, brak
+ścieżka absolutna, błędny HMAC, stary timestamp, ponowny nonce,
+niedozwolone rozszerzenie, brak
 tokenu OAuth, błędny token, dozwolony `ALLOWED_EMAIL`, odrzucenie innego
 adresu, brak wycieku sekretów — oraz (po audycie bezpieczeństwa): ekran
 zgody (renderowanie, CSRF, odrzucenie, wygasły/podrobiony stan), allowlista
@@ -169,8 +162,8 @@ i walidacja redirect_uri (w tym ochrona przed open redirect), DCR (wygasły
 `client_id`/`redirect_uri` w `/oauth/token`, jednorazowość kodu
 autoryzacyjnego (replay odrzucony przez `consumeAuthCode`), wygasły kod,
 `email_verified`/`ALLOWED_EMAIL` (`googleIdentity`), limity `listTree`/
-`search` (`truncated`), każda operacja zapisu odrzucona przy
-`WRITE_ENABLED=false`, nieznana operacja Apps Script, `assertDescendant_`
+`search` (`truncated`), brak operacji i eksportów zapisu w Code.gs niezależnie
+od właściwości skryptu, nieznana operacja Apps Script, `assertDescendant_`
 dla pliku spoza `ROOT_FOLDER_ID`, rate limiting (`429` + `Retry-After`).
 
 Zasada kluczowa: testy weryfikują **realne** funkcje `apps-script/Code.gs`
@@ -183,3 +176,33 @@ nie jest testowana na poziomie HTTP (jose na Node pobiera JWKS przez
 `node:https`, z pominięciem globalnego `fetch`, więc nie da się tego
 sensownie zamockować) — logika PO weryfikacji podpisu jest wydzielona do
 `lib/auth/googleIdentity.ts` i tam w pełni testowana.
+
+Aktualny wynik: 100 testów, 100 zaliczonych, 0 pominiętych. Oba typechecki i
+produkcyjny build Next.js przechodzą. Build nie wymaga sekretów. Pełny E2E
+OAuth z prawdziwym Google JWKS oraz klientami Claude i ChatGPT nie został
+wykonany, ponieważ nie ma jeszcze wdrożenia Preview.
+
+## 7. Zależności i audyt
+
+Kontrolowane aktualizacje w Fazie 1:
+
+- `next` 15.5.20 → 15.5.22,
+- `fast-uri` 3.1.3 → 3.1.5,
+- `@hono/node-server` 1.19.14 → 1.19.17,
+- `postcss` 8.4.31 → 8.5.25 przez override zgodny z major wersją.
+
+Usunęły one podatności bezpośrednie Next.js, `fast-uri` i PostCSS. Aktualny
+`npm audit --omit=dev` raportuje 5 pozycji: 3 umiarkowane i 2 wysokie.
+
+1. `@hono/node-server`, `@modelcontextprotocol/sdk` i `mcp-handler` opisują
+   jeden traversal w `serve-static` na Windows. Helios działa na Vercel Linux,
+   nie wywołuje `serve-static`, a pakiet nie trafia do trace tras builda.
+   Osiągalność jest więc niska, lecz nie zerowa z gwarancją. Poprawka wymaga
+   migracji `mcp-handler` 1.x → 2.x i osobnej walidacji kompatybilności.
+2. `sharp` i wynikowy wpis `next` dotyczą libvips. Helios nie ma obrazów ani
+   `next/image`, lecz `sharp` jest obecny w ogólnym trace serwera Next.js.
+   Poprawiona linia `sharp@0.35.x` leży poza zakresem wspieranym przez
+   `next@15.5.22` (`^0.34.3`). Nie wymuszono nieobsługiwanej wersji.
+
+Nie użyto `npm audit fix --force`. Pozostałe ryzyka muszą zostać ponownie
+ocenione przed Production lub przy migracji głównych zależności.
