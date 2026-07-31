@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { evaluateGoogleIdentity } from "../lib/auth/googleIdentity.js";
+import { evaluateGoogleIdentity } from "../lib/auth/googleIdentity";
 
 const ALLOWED = "me@example.com";
 

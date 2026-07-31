@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { resetRateLimitState } from "../lib/security/rateLimit.js";
-import { POST } from "../app/oauth/register/route.js";
+import { resetRateLimitState } from "../lib/security/rateLimit";
+import { POST } from "../app/oauth/register/route";
 
 // loadConfig() czyta process.env na żywo przy każdym żądaniu — możemy więc
 // ustawić je raz dla tego pliku testowego.
@@ -13,7 +13,7 @@ process.env.APPS_SCRIPT_SECRET = "s".repeat(32);
 process.env.AUTH_SECRET = "a".repeat(32);
 process.env.GOOGLE_CLIENT_ID = "cid.apps.googleusercontent.com";
 process.env.GOOGLE_CLIENT_SECRET = "gsecret";
-process.env.NODE_ENV = "production";
+Object.assign(process.env, { NODE_ENV: "production" });
 delete process.env.ALLOWED_OAUTH_REDIRECT_URIS;
 
 function registerReq(body: unknown, ip = "203.0.113.1"): Request {

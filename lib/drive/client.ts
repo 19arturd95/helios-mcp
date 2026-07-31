@@ -6,8 +6,8 @@
  * sekretów w rzucanych błędach.
  */
 
-import { signPayload } from "../security/signing.js";
-import type { AdapterOp, AdapterResponse } from "./types.js";
+import { signPayload } from "../security/signing";
+import type { AdapterOp, AdapterResponse } from "./types";
 
 export class DriveAdapterError extends Error {
   constructor(

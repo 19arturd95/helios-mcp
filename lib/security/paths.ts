@@ -23,9 +23,6 @@ export class PathValidationError extends Error {
 
 export const DEFAULT_ALLOWED_EXTENSIONS = [".md"] as const;
 
-/** Maksymalny rozmiar zapisu: 1 MB (w bajtach UTF-8). */
-export const MAX_WRITE_BYTES = 1024 * 1024;
-
 export interface NormalizePathOptions {
   /** Dozwolone rozszerzenia (małe litery, z kropką). Domyślnie `.md`. */
   allowedExtensions?: readonly string[];
@@ -103,22 +100,4 @@ export function normalizePath(raw: unknown, opts: NormalizePathOptions = {}): st
   }
 
   return finalPath;
-}
-
-/** Liczba bajtów UTF-8 tekstu (działa w Node i w środowisku Edge/Workers). */
-export function utf8ByteLength(text: string): number {
-  return new TextEncoder().encode(text).length;
-}
-
-/**
- * Sprawdza limit rozmiaru zapisu (domyślnie 1 MB). Rzuca `PathValidationError`
- * przy przekroczeniu.
- */
-export function assertWithinWriteLimit(content: string, maxBytes: number = MAX_WRITE_BYTES): void {
-  const size = utf8ByteLength(content);
-  if (size > maxBytes) {
-    throw new PathValidationError(
-      `Zawartość przekracza limit ${maxBytes} bajtów (ma ${size}).`,
-    );
-  }
 }

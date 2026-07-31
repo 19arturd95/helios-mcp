@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { signPayload, canonicalString, hmacSha256Base64 } from "../lib/security/signing.js";
-import { loadAppsScript, makeDeps } from "./helpers/appsScript.js";
+import { signPayload, canonicalString, hmacSha256Base64 } from "../lib/security/signing";
+import { loadAppsScript, makeDeps } from "./helpers/appsScript";
 
 const gas = loadAppsScript();
 const SECRET = "shared-secret-abcdefghijklmnop";

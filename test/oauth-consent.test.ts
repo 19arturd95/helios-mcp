@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { resetRateLimitState } from "../lib/security/rateLimit.js";
-import { issueConsentToken } from "../lib/auth/tokens.js";
-import { POST as consentPost } from "../app/oauth/consent/route.js";
+import { resetRateLimitState } from "../lib/security/rateLimit";
+import { issueConsentToken } from "../lib/auth/tokens";
+import { POST as consentPost } from "../app/oauth/consent/route";
 
 process.env.ALLOWED_EMAIL = "me@example.com";
 process.env.PUBLIC_BASE_URL = "https://helios.example.com";
@@ -12,7 +12,7 @@ process.env.APPS_SCRIPT_SECRET = "s".repeat(32);
 process.env.AUTH_SECRET = "a".repeat(32);
 process.env.GOOGLE_CLIENT_ID = "cid.apps.googleusercontent.com";
 process.env.GOOGLE_CLIENT_SECRET = "gsecret";
-process.env.NODE_ENV = "production";
+Object.assign(process.env, { NODE_ENV: "production" });
 
 const AUTH_SECRET = process.env.AUTH_SECRET!;
 const BASE_URL = process.env.PUBLIC_BASE_URL!;

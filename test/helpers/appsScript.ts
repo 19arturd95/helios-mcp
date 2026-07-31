@@ -31,12 +31,11 @@ export interface AppsScriptExports {
   dispatch_(request: Record<string, unknown>, props: FakePropertiesStore): unknown;
   doPost(e: { postData?: { contents?: string } }): { getContent(): string };
   doGet(): { getContent(): string };
-  opStatus_(root: FakeFolder, props: FakePropertiesStore): unknown;
+  opStatus_(root: FakeFolder): unknown;
   opListTree_(root: FakeFolder, request: Record<string, unknown>): { root: unknown; truncated: boolean };
   opSearch_(root: FakeFolder, request: Record<string, unknown>): { query: string; hits: unknown[]; truncated: boolean };
   opRead_(root: FakeFolder, rootId: string, request: Record<string, unknown>): unknown;
   assertDescendant_(file: FakeFile | FakeFolder, rootId: string): boolean;
-  writeEnabled_(props: FakePropertiesStore): boolean;
   getRoot_(props: FakePropertiesStore): FakeFolder;
   consumeAuthCode_(props: FakePropertiesStore, jti: unknown, exp: unknown): { consumed: boolean };
   cleanupExpiredAuthCodes_(props: FakePropertiesStore, now: number): void;
@@ -44,7 +43,6 @@ export interface AppsScriptExports {
   MAX_SEARCH_SCAN: number;
   MAX_SEARCH_CONTENT_READS: number;
   READ_OPS: Record<string, boolean>;
-  WRITE_OPS: Record<string, boolean>;
   META_OPS: Record<string, boolean>;
 }
 
@@ -111,10 +109,7 @@ export interface FakeFile {
   getMimeType(): string;
   getLastUpdated(): Date;
   getBlob(): { getDataAsString(): string; getBytes(): { length: number } };
-  setContent(c: string): void;
   getParents(): { hasNext(): boolean; next(): FakeFolder };
-  moveTo(folder: FakeFolder): void;
-  makeCopy(name: string, folder: FakeFolder): FakeFile;
   _isFile: true;
 }
 
@@ -148,7 +143,6 @@ export interface FakeGasEnv {
   Utilities: {
     computeHmacSha256Signature(message: string, secret: string): number[];
     base64Encode(bytes: number[]): string;
-    newBlob(content: string, mimeType?: string): { getBytes(): { length: number } };
     Charset: { UTF_8: string };
   };
   ContentService: {
@@ -160,7 +154,7 @@ export interface FakeGasEnv {
   /** Plik BEZ powiązania z żadnym folderem — symuluje plik spoza ROOT_FOLDER_ID. */
   createDetachedFile(name: string, content: string): FakeFile;
   props: FakePropertiesStore;
-  /** Ustawia właściwości skryptu na sztywno (ROOT_FOLDER_ID, SHARED_SECRET, WRITE_ENABLED...). */
+  /** Ustawia właściwości skryptu na sztywno (ROOT_FOLDER_ID, SHARED_SECRET...). */
   setScriptProperties(values: Record<string, string>): void;
 }
 
@@ -185,21 +179,7 @@ export function createFakeGasEnv(scriptProps: Record<string, string> = {}): Fake
         getDataAsString: () => state.content,
         getBytes: () => ({ length: Buffer.byteLength(state.content, "utf8") }),
       }),
-      setContent: (c: string) => {
-        state.content = c;
-        state.lastUpdated = new Date();
-      },
       getParents: () => makeIterator(state.parents.slice()),
-      moveTo: (folder: FakeFolder) => {
-        for (const p of state.parents) p._removeFile(handle);
-        state.parents = [folder];
-        folder._addFile(handle);
-      },
-      makeCopy: (copyName: string, folder: FakeFolder) => {
-        const copy = createFile(copyName, state.content, state.mimeType, folder);
-        folder._addFile(copy);
-        return copy;
-      },
       _isFile: true,
     };
     registry.set(id, handle);
@@ -283,9 +263,6 @@ export function createFakeGasEnv(scriptProps: Record<string, string> = {}): Fake
     computeHmacSha256Signature: (message: string, secret: string): number[] =>
       Array.from(createHmac("sha256", secret).update(message, "utf8").digest()),
     base64Encode: (bytes: number[]): string => Buffer.from(bytes).toString("base64"),
-    newBlob: (content: string, _mimeType?: string) => ({
-      getBytes: () => ({ length: Buffer.byteLength(content, "utf8") }),
-    }),
     Charset: { UTF_8: "UTF-8" },
   };
 

@@ -1,4 +1,4 @@
-import type { HeliosConfig } from "../../lib/config.js";
+import type { HeliosConfig } from "../../lib/config";
 
 export function testConfig(overrides: Partial<HeliosConfig> = {}): HeliosConfig {
   return {
@@ -9,7 +9,6 @@ export function testConfig(overrides: Partial<HeliosConfig> = {}): HeliosConfig 
     authSecret: "a".repeat(40),
     googleClientId: "client-id.apps.googleusercontent.com",
     googleClientSecret: "google-client-secret-value",
-    writeEnabled: false,
     allowedRedirectUris: undefined,
     allowLocalhostRedirect: true,
     ...overrides,

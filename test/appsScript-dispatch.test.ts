@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { createFakeGasEnv, loadAppsScriptWithEnv } from "./helpers/appsScript.js";
+import { createFakeGasEnv, loadAppsScriptWithEnv } from "./helpers/appsScript";
 
 function makeEnv(scriptProps: Record<string, string> = {}) {
   const env = createFakeGasEnv(scriptProps);
@@ -16,11 +16,8 @@ test("nieznana operacja jest odrzucana", () => {
   assert.throws(() => gas.dispatch_({}, env.props), /Nieznana operacja/);
 });
 
-test("każda operacja zapisu jest odrzucana, gdy WRITE_ENABLED=false (domyślnie)", () => {
-  const { env, gas } = makeEnv({ WRITE_ENABLED: "false" });
-  const wiki = env.root.createFolder("20 Wiki");
-  wiki.createFile("a.md", "tresc", "text/markdown");
-
+test("operacje zapisu są nieznane niezależnie od właściwości skryptu", () => {
+  const { env, gas } = makeEnv({ WRITE_ENABLED: "true" });
   const writeRequests: Array<Record<string, unknown>> = [
     { op: "create", path: "20 Wiki/nowy.md", content: "x" },
     { op: "update", path: "20 Wiki/a.md", content: "y", expectedModifiedTime: new Date().toISOString() },
@@ -31,16 +28,26 @@ test("każda operacja zapisu jest odrzucana, gdy WRITE_ENABLED=false (domyślnie
   for (const req of writeRequests) {
     assert.throws(
       () => gas.dispatch_(req, env.props),
-      /wyłączone/,
-      `operacja ${req.op} powinna być zablokowana`,
+      /Nieznana operacja/,
+      `operacja ${req.op} nie może istnieć w Fazie 1`,
     );
   }
 });
 
-test("operacje zapisu przechodzą, gdy WRITE_ENABLED=true (weryfikacja samego mechanizmu przełącznika)", () => {
-  const { env, gas } = makeEnv({ WRITE_ENABLED: "true" });
-  const result = gas.dispatch_({ op: "create", path: "nowy.md", content: "tresc" }, env.props) as { path: string };
-  assert.equal(result.path, "nowy.md");
+test("Code.gs nie eksportuje implementacji zapisu ani przełącznika WRITE_ENABLED", () => {
+  const { gas } = makeEnv();
+  const exports = gas as unknown as Record<string, unknown>;
+  for (const name of [
+    "opCreate_",
+    "opUpdate_",
+    "opAppend_",
+    "opBackup_",
+    "opMoveToArchive_",
+    "writeEnabled_",
+    "WRITE_OPS",
+  ]) {
+    assert.equal(exports[name], undefined, `${name} nie może istnieć w Fazie 1`);
+  }
 });
 
 test("brak ROOT_FOLDER_ID nie blokuje operacji meta (consumeAuthCode) — nie dotyczą Drive", () => {

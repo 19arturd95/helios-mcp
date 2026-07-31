@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { checkRateLimit, hashRateLimitKey, enforceRateLimit, resetRateLimitState } from "../lib/security/rateLimit.js";
+import { checkRateLimit, hashRateLimitKey, enforceRateLimit, resetRateLimitState } from "../lib/security/rateLimit";
 
 test("checkRateLimit dopuszcza żądania do limitu, potem blokuje", () => {
   resetRateLimitState();

@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { makeToolContext, handleReadNote, handleStatus } from "../lib/tools/handlers.js";
-import type { ReadResult, StatusResult } from "../lib/drive/types.js";
-import { loadAppsScript, makeDeps } from "./helpers/appsScript.js";
-import { testConfig } from "./helpers/config.js";
+import { makeToolContext, handleReadNote, handleStatus } from "../lib/tools/handlers";
+import type { ReadResult, StatusResult } from "../lib/drive/types";
+import { loadAppsScript, makeDeps } from "./helpers/appsScript";
+import { testConfig } from "./helpers/config";
 
 const gas = loadAppsScript();
 
@@ -30,7 +30,7 @@ function fakeAdapterFetch(secret: string): typeof fetch {
         rootId: "root-1",
         rootName: "helios",
         serverTime: "2026-07-13T10:00:00.000Z",
-        writeEnabled: false,
+        readOnly: true,
       };
       return new Response(JSON.stringify({ ok: true, result }), {
         status: 200,
@@ -69,7 +69,7 @@ test("helios_status przechodzi przez podpisany kanał", async () => {
   const res = await handleStatus(ctx);
   assert.equal(res.ok, true);
   assert.equal(res.rootName, "helios");
-  assert.equal(res.writeEnabled, false);
+  assert.equal(res.readOnly, true);
 });
 
 test("odczyt z niedozwoloną ścieżką jest odrzucany zanim wyjdzie w sieć", async () => {

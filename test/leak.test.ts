@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { loadConfig } from "../lib/config.js";
-import { callAdapter, DriveAdapterError } from "../lib/drive/client.js";
-import { signPayload } from "../lib/security/signing.js";
+import { loadConfig } from "../lib/config";
+import { callAdapter, DriveAdapterError } from "../lib/drive/client";
+import { signPayload } from "../lib/security/signing";
 
 const FULL_ENV = {
   ALLOWED_EMAIL: "me@example.com",

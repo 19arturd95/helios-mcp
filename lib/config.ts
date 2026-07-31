@@ -6,7 +6,7 @@
  *  - Komunikaty błędów NIGDY nie zawierają wartości sekretów — tylko ich nazwy.
  */
 
-import { parseRedirectAllowlist } from "./security/redirect.js";
+import { parseRedirectAllowlist } from "./security/redirect";
 
 export interface HeliosConfig {
   /** Jedyny dozwolony adres e-mail (Google). */
@@ -23,8 +23,6 @@ export interface HeliosConfig {
   googleClientId: string;
   /** Google OAuth Client Secret. */
   googleClientSecret: string;
-  /** Czy Faza 2 (zapis) jest włączona. Domyślnie false. */
-  writeEnabled: boolean;
   /**
    * Opcjonalna, dokładna allowlista redirect_uri klientów OAuth
    * (`ALLOWED_OAUTH_REDIRECT_URIS`, rozdzielona przecinkami). Gdy ustawiona,
@@ -85,7 +83,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     authSecret,
     googleClientId: env.GOOGLE_CLIENT_ID!.trim(),
     googleClientSecret: env.GOOGLE_CLIENT_SECRET!.trim(),
-    writeEnabled: (env.HELIOS_WRITE_ENABLED ?? "false").trim().toLowerCase() === "true",
     allowedRedirectUris: parseRedirectAllowlist(env.ALLOWED_OAUTH_REDIRECT_URIS),
     allowLocalhostRedirect: (env.NODE_ENV ?? "development") !== "production",
   };

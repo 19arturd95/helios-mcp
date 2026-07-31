@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { mcpResourceUrl } from "../lib/config.js";
-import { issueAccessToken, verifyPkceS256 } from "../lib/auth/tokens.js";
-import { verifyMcpBearer } from "../lib/auth/verifyToken.js";
-import { testConfig } from "./helpers/config.js";
+import { mcpResourceUrl } from "../lib/config";
+import { issueAccessToken, verifyPkceS256 } from "../lib/auth/tokens";
+import { verifyMcpBearer } from "../lib/auth/verifyToken";
+import { testConfig } from "./helpers/config";
 
 const cfg = testConfig();
 const audience = mcpResourceUrl(cfg.baseUrl);

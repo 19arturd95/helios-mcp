@@ -8,8 +8,8 @@ import {
   verifyConsentToken,
   issueAuthorizationCode,
   verifyAuthorizationCode,
-} from "../lib/auth/tokens.js";
-import { testConfig } from "./helpers/config.js";
+} from "../lib/auth/tokens";
+import { testConfig } from "./helpers/config";
 
 const cfg = testConfig();
 

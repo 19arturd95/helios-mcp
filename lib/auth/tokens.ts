@@ -11,7 +11,7 @@
  */
 
 import { SignJWT, jwtVerify } from "jose";
-import { randomNonce } from "../security/signing.js";
+import { randomNonce } from "../security/signing";
 
 const AUD_CLIENT = "helios:client";
 const AUD_CODE = "helios:auth_code";

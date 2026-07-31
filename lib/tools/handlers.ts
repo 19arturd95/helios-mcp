@@ -5,12 +5,12 @@
  * przygotowują dane, a klasyfikację/treść zmian robi model hostujący.
  */
 
-import type { HeliosConfig } from "../config.js";
-import { callAdapter, type AdapterClientConfig } from "../drive/client.js";
-import type { AdapterOp, ListTreeResult, ReadResult, SearchResult, StatusResult, TreeNode } from "../drive/types.js";
-import { normalizePath } from "../security/paths.js";
-import { PATHS } from "./constants.js";
-import type { GetContextInput, ListTreeInput, ReadNoteInput, ReviewInboxInput, SearchInput } from "./schemas.js";
+import type { HeliosConfig } from "../config";
+import { callAdapter, type AdapterClientConfig } from "../drive/client";
+import type { AdapterOp, ListTreeResult, ReadResult, SearchResult, StatusResult, TreeNode } from "../drive/types";
+import { normalizePath } from "../security/paths";
+import { PATHS } from "./constants";
+import type { GetContextInput, ListTreeInput, ReadNoteInput, ReviewInboxInput, SearchInput } from "./schemas";
 
 export interface ToolContext {
   config: HeliosConfig;
@@ -103,7 +103,7 @@ export async function handleGetContext(
       date: input.date ?? new Date().toISOString(),
       hints: input.hints ?? [],
     },
-    note: "Tylko odczyt. Na podstawie tych danych przygotuj plan zmian i wywołaj helios_commit_memory (Faza 2, gdy zapis będzie włączony).",
+    note: "Tylko odczyt. Na podstawie tych danych można przygotować plan zmian, ale Faza 1 nie udostępnia operacji zapisu.",
   };
 }
 
@@ -167,6 +167,6 @@ export async function handleReviewInbox(
   return {
     inboxPath: status.inboxPath,
     reviewed,
-    note: "Tylko odczyt. Zwrócone dane służą do przygotowania planu; nic nie zmieniono. Zastosowanie planu wymaga helios_apply_inbox_plan (Faza 2).",
+    note: "Tylko odczyt. Zwrócone dane służą do przygotowania planu; Faza 1 nie udostępnia operacji zastosowania planu.",
   };
 }

@@ -7,8 +7,8 @@
  *  - e-mail zgodny z ALLOWED_EMAIL — inaczej odmowa.
  */
 
-import { loadConfig, mcpResourceUrl, type HeliosConfig } from "../config.js";
-import { verifyAccessToken } from "./tokens.js";
+import { loadConfig, mcpResourceUrl, type HeliosConfig } from "../config";
+import { verifyAccessToken } from "./tokens";
 
 /** Struktura zgodna z `AuthInfo` z MCP SDK. */
 export interface McpAuthInfo {

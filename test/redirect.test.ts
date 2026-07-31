@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { isAllowedRedirectUri, parseRedirectAllowlist } from "../lib/security/redirect.js";
+import { isAllowedRedirectUri, parseRedirectAllowlist } from "../lib/security/redirect";
 
 test("https jest zawsze dozwolone (bez allowlisty)", () => {
   assert.equal(isAllowedRedirectUri("https://client.example.com/cb", { allowLocalhost: false }), true);

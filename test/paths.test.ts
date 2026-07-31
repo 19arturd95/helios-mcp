@@ -4,10 +4,8 @@ import assert from "node:assert/strict";
 import {
   normalizePath,
   PathValidationError,
-  assertWithinWriteLimit,
-  MAX_WRITE_BYTES,
-} from "../lib/security/paths.js";
-import { loadAppsScript } from "./helpers/appsScript.js";
+} from "../lib/security/paths";
+import { loadAppsScript } from "./helpers/appsScript";
 
 const gas = loadAppsScript();
 
@@ -55,11 +53,4 @@ test("Unicode jest normalizowany do NFC", () => {
   const decomposed = "notatki/café.md";
   const out = normalizePath(decomposed);
   assert.equal(out, "notatki/café.md".normalize("NFC"));
-});
-
-test("limit rozmiaru zapisu (1 MB) jest egzekwowany", () => {
-  const ok = "x".repeat(1000);
-  assert.doesNotThrow(() => assertWithinWriteLimit(ok));
-  const tooBig = "x".repeat(MAX_WRITE_BYTES + 1);
-  assert.throws(() => assertWithinWriteLimit(tooBig), PathValidationError);
 });

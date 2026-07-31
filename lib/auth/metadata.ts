@@ -7,7 +7,7 @@
  *    (własnego) serwera autoryzacji.
  */
 
-import { mcpResourceUrl } from "../config.js";
+import { mcpResourceUrl } from "../config";
 
 export function protectedResourceMetadata(baseUrl: string) {
   const base = baseUrl.replace(/\/+$/, "");

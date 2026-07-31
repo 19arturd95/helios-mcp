@@ -8,14 +8,13 @@
  * Script Properties (Ustawienia projektu → Właściwości skryptu):
  *   ROOT_FOLDER_ID   — ID folderu głównego "helios" na Drive.
  *   SHARED_SECRET    — wspólny sekret HMAC (identyczny z APPS_SCRIPT_SECRET w MCP).
- *   WRITE_ENABLED    — (opcjonalne) "true" włącza operacje zapisu. Domyślnie wyłączone.
  *
  * Zasady bezpieczeństwa:
  *   - odrzuca żądania starsze niż 5 minut (okno ±300 s),
  *   - odrzuca ponownie użyte nonce (CacheService, check-and-set atomowy przez LockService),
  *   - odrzuca nieprawidłowy podpis HMAC (porównanie w czasie stałym),
  *   - blokuje ścieżki absolutne, "..", traversal, "%", "\", znaki sterujące,
- *   - domyślnie tylko pliki .md, maksymalny zapis 1 MB,
+ *   - obsługuje wyłącznie operacje odczytu notatek oraz `consumeAuthCode`,
  *   - limity listTree/search (liczba węzłów, liczba odczytów treści, liczba wyników),
  *   - nie loguje treści notatek, nie zwraca sekretów w błędach,
  *   - brak trwałego usuwania, brak zmian uprawnień, brak udostępniania.
@@ -23,17 +22,14 @@
  * `consumeAuthCode` — jednorazowe zużycie kodu autoryzacyjnego OAuth (MCP):
  * atomowy check-and-set przez LockService + PropertiesService (przechowuje
  * WYŁĄCZNIE jti + czas wygaśnięcia, nigdy sam kod/token). To stan bezpieczeństwa
- * OAuth, niezależny od `WRITE_ENABLED` — działa nawet gdy zapis notatek jest
- * wyłączony. CacheService/PropertiesService wystarczają dla modelu ryzyka Fazy 1
+ * OAuth, niezależny od odczytu notatek. CacheService/PropertiesService
+ * wystarczają dla modelu ryzyka Fazy 1
  * (pojedynczy użytkownik, niski wolumen); Faza 2 (zapis) będzie wymagać
  * trwalszego mechanizmu idempotencji operacji zapisu (patrz docs/PLAN.md).
  */
 
 var MAX_SKEW_SECONDS = 300;
-var MAX_WRITE_BYTES = 1024 * 1024;
 var ALLOWED_EXTENSIONS = ['.md'];
-var BACKUPS_DIR = '90 System/Backups';
-var ARCHIVE_INBOX_DIR = '99 Archive/Inbox';
 
 // Limity kosztu listTree/search — chronią przed DoS przez wyliczanie całego Drive.
 var MAX_TREE_NODES = 500;       // maksymalna liczba węzłów (folderów+plików) w drzewie
@@ -44,9 +40,7 @@ var MAX_SEARCH_CONTENT_READS = 200; // maksymalna liczba odczytów TREŚCI pliku
 var MAX_RESPONSE_BYTES = 200 * 1024;
 
 var READ_OPS = { status: true, listTree: true, search: true, read: true };
-var WRITE_OPS = { create: true, update: true, append: true, backup: true, moveToArchive: true };
-// Operacje "meta" (bezpieczeństwo OAuth) — nie dotyczą Drive, nie są gated
-// przez WRITE_ENABLED.
+// Operacje "meta" (bezpieczeństwo OAuth) — nie modyfikują vaulta Helios.
 var META_OPS = { consumeAuthCode: true };
 var AUTH_CODE_PROP_PREFIX = 'authcode:';
 
@@ -246,10 +240,6 @@ function getRoot_(props) {
   return DriveApp.getFolderById(id);
 }
 
-function writeEnabled_(props) {
-  return String(props.getProperty('WRITE_ENABLED') || 'false').toLowerCase() === 'true';
-}
-
 function assertDescendant_(file, rootId) {
   var seen = {};
   var toVisit = [];
@@ -277,51 +267,32 @@ function childFile_(folder, name) {
   return it.hasNext() ? it.next() : null;
 }
 
-function resolveByPath_(root, safePath, createMissing) {
+function resolveByPath_(root, safePath) {
   var parts = safePath.split('/');
   var fileName = parts.pop();
   var folder = root;
   for (var i = 0; i < parts.length; i++) {
     var next = childFolder_(folder, parts[i]);
     if (!next) {
-      if (!createMissing) return { folder: null, file: null, fileName: fileName };
-      next = folder.createFolder(parts[i]);
+      return { folder: null, file: null, fileName: fileName };
     }
     folder = next;
   }
   return { folder: folder, file: childFile_(folder, fileName), fileName: fileName };
 }
 
-function folderByPath_(root, safeFolderPath, createMissing) {
+function folderByPath_(root, safeFolderPath) {
   var parts = safeFolderPath.split('/');
   var folder = root;
   for (var i = 0; i < parts.length; i++) {
     if (!parts[i]) continue;
     var next = childFolder_(folder, parts[i]);
     if (!next) {
-      if (!createMissing) return null;
-      next = folder.createFolder(parts[i]);
+      return null;
     }
     folder = next;
   }
   return folder;
-}
-
-function fileMeta_(file, path) {
-  return {
-    path: path,
-    id: file.getId(),
-    name: file.getName(),
-    mimeType: file.getMimeType(),
-    modifiedTime: file.getLastUpdated().toISOString()
-  };
-}
-
-function assertSize_(content) {
-  var bytes = Utilities.newBlob(content, 'text/plain').getBytes().length;
-  if (bytes > MAX_WRITE_BYTES) {
-    throw new Error('Zawartość przekracza limit ' + MAX_WRITE_BYTES + ' bajtów.');
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -378,11 +349,8 @@ function consumeAuthCode_(props, jti, expSeconds) {
 
 function dispatch_(request, props) {
   var op = request && request.op;
-  if (!op || (!READ_OPS[op] && !WRITE_OPS[op] && !META_OPS[op])) {
+  if (!op || (!READ_OPS[op] && !META_OPS[op])) {
     throw new Error('Nieznana operacja.');
-  }
-  if (WRITE_OPS[op] && !writeEnabled_(props)) {
-    throw new Error('Operacje zapisu są wyłączone (Faza 1).');
   }
   if (META_OPS[op]) {
     switch (op) {
@@ -394,26 +362,21 @@ function dispatch_(request, props) {
   var rootId = root.getId();
 
   switch (op) {
-    case 'status': return opStatus_(root, props);
+    case 'status': return opStatus_(root);
     case 'listTree': return opListTree_(root, request);
     case 'search': return opSearch_(root, request);
     case 'read': return opRead_(root, rootId, request);
-    case 'create': return opCreate_(root, rootId, request);
-    case 'update': return opUpdate_(root, rootId, request);
-    case 'append': return opAppend_(root, rootId, request);
-    case 'backup': return opBackup_(root, rootId, request);
-    case 'moveToArchive': return opMoveToArchive_(root, rootId, request);
     default: throw new Error('Nieobsługiwana operacja.');
   }
 }
 
-function opStatus_(root, props) {
+function opStatus_(root) {
   return {
     ok: true,
     rootId: root.getId(),
     rootName: root.getName(),
     serverTime: new Date().toISOString(),
-    writeEnabled: writeEnabled_(props)
+    readOnly: true
   };
 }
 
@@ -471,7 +434,7 @@ function opListTree_(root, request) {
   var basePath = '';
   if (request.path) {
     var safe = pathSafe_(request.path, { requireExtension: false });
-    startFolder = folderByPath_(root, safe, false);
+    startFolder = folderByPath_(root, safe);
     if (!startFolder) throw new Error('Folder nie istnieje.');
     basePath = safe;
   }
@@ -535,7 +498,7 @@ function opSearch_(root, request) {
 
 function opRead_(root, rootId, request) {
   var safe = pathSafe_(request.path);
-  var resolved = resolveByPath_(root, safe, false);
+  var resolved = resolveByPath_(root, safe);
   if (!resolved.file) throw new Error('Notatka nie istnieje.');
   assertDescendant_(resolved.file, rootId);
   return {
@@ -545,77 +508,6 @@ function opRead_(root, rootId, request) {
     modifiedTime: resolved.file.getLastUpdated().toISOString(),
     content: resolved.file.getBlob().getDataAsString()
   };
-}
-
-// --- operacje zapisu (Faza 2, domyślnie zablokowane przez WRITE_ENABLED) ---
-
-function opCreate_(root, rootId, request) {
-  var safe = pathSafe_(request.path);
-  var content = String(request.content || '');
-  assertSize_(content);
-  var resolved = resolveByPath_(root, safe, true);
-  if (resolved.file) throw new Error('Plik już istnieje — użyj update.');
-  var created = resolved.folder.createFile(resolved.fileName, content, 'text/markdown');
-  assertDescendant_(created, rootId);
-  return fileMeta_(created, safe);
-}
-
-function opUpdate_(root, rootId, request) {
-  var safe = pathSafe_(request.path);
-  var content = String(request.content || '');
-  assertSize_(content);
-  var resolved = resolveByPath_(root, safe, false);
-  if (!resolved.file) throw new Error('Notatka nie istnieje.');
-  assertDescendant_(resolved.file, rootId);
-
-  var actual = resolved.file.getLastUpdated().toISOString();
-  var expected = request.expectedModifiedTime;
-  if (!expected || new Date(expected).getTime() !== new Date(actual).getTime()) {
-    throw new Error('Konflikt wersji: oczekiwano ' + expected + ', bieżące ' + actual + '.');
-  }
-  backupFile_(root, resolved.file, safe);
-  resolved.file.setContent(content);
-  return fileMeta_(resolved.file, safe);
-}
-
-function opAppend_(root, rootId, request) {
-  var safe = pathSafe_(request.path);
-  var text = String(request.text || '');
-  var resolved = resolveByPath_(root, safe, false);
-  if (!resolved.file) throw new Error('Notatka nie istnieje.');
-  assertDescendant_(resolved.file, rootId);
-  var current = resolved.file.getBlob().getDataAsString();
-  var combined = current + (current.length && current.charAt(current.length - 1) !== '\n' ? '\n' : '') + text;
-  assertSize_(combined);
-  backupFile_(root, resolved.file, safe);
-  resolved.file.setContent(combined);
-  return fileMeta_(resolved.file, safe);
-}
-
-function backupFile_(root, file, safePath) {
-  var backupsFolder = folderByPath_(root, BACKUPS_DIR, true);
-  var stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  var backupName = safePath.replace(/\//g, '__') + '.' + stamp + '.bak.md';
-  var copy = file.makeCopy(backupName, backupsFolder);
-  return fileMeta_(copy, BACKUPS_DIR + '/' + backupName);
-}
-
-function opBackup_(root, rootId, request) {
-  var safe = pathSafe_(request.path);
-  var resolved = resolveByPath_(root, safe, false);
-  if (!resolved.file) throw new Error('Notatka nie istnieje.');
-  assertDescendant_(resolved.file, rootId);
-  return backupFile_(root, resolved.file, safe);
-}
-
-function opMoveToArchive_(root, rootId, request) {
-  var safe = pathSafe_(request.path);
-  var resolved = resolveByPath_(root, safe, false);
-  if (!resolved.file) throw new Error('Notatka nie istnieje.');
-  assertDescendant_(resolved.file, rootId);
-  var archiveFolder = folderByPath_(root, ARCHIVE_INBOX_DIR, true);
-  resolved.file.moveTo(archiveFolder);
-  return fileMeta_(resolved.file, ARCHIVE_INBOX_DIR + '/' + resolved.fileName);
 }
 
 // ---------------------------------------------------------------------------
@@ -634,13 +526,7 @@ if (typeof module !== 'undefined' && module.exports) {
     opListTree_: opListTree_,
     opSearch_: opSearch_,
     opRead_: opRead_,
-    opCreate_: opCreate_,
-    opUpdate_: opUpdate_,
-    opAppend_: opAppend_,
-    opBackup_: opBackup_,
-    opMoveToArchive_: opMoveToArchive_,
     assertDescendant_: assertDescendant_,
-    writeEnabled_: writeEnabled_,
     getRoot_: getRoot_,
     consumeAuthCode_: consumeAuthCode_,
     cleanupExpiredAuthCodes_: cleanupExpiredAuthCodes_,
@@ -648,7 +534,6 @@ if (typeof module !== 'undefined' && module.exports) {
     MAX_SEARCH_SCAN: MAX_SEARCH_SCAN,
     MAX_SEARCH_CONTENT_READS: MAX_SEARCH_CONTENT_READS,
     READ_OPS: READ_OPS,
-    WRITE_OPS: WRITE_OPS,
     META_OPS: META_OPS
   };
 }

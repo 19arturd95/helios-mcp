@@ -10,7 +10,4 @@ export const PATHS = {
   schema: "90 System/SCHEMA.md",
   wikiIndex: "20 Wiki/index.md",
   inboxDir: "00 Inbox",
-  archiveInboxDir: "99 Archive/Inbox",
-  backupsDir: "90 System/Backups",
-  log: "90 System/log.md",
 } as const;
