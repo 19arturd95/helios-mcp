@@ -18,7 +18,7 @@ ChatGPT / Claude  →  Helios MCP (Vercel)  →  Helios Drive Adapter (Apps Scri
 - testy lokalne: 100/100, bez pominiętych testów,
 - oba typechecki przechodzą,
 - CI dla pull requestów wykonuje `npm ci`, testy, oba typechecki i build,
-- `npm audit --omit=dev`: 5 podatności, 3 umiarkowane i 2 wysokie. Ocena
+- `npm audit --omit=dev`: 5 podatności, 2 umiarkowane i 3 wysokie. Ocena
   osiągalności znajduje się w sekcji „Pozostałe ryzyka zależności”,
 - nie wykonano wdrożenia ani pełnych testów E2E OAuth z Google, Claude lub
   ChatGPT. To osobny etap po decyzji o Vercel Preview.
@@ -210,18 +210,21 @@ npm run dev           # uruchomienie lokalne (wymaga .env.local)
 
 Po aktualizacji do `next@15.5.22`, `fast-uri@3.1.5`,
 `@hono/node-server@1.19.17` i bezpiecznego `postcss@8.5.25`, wynik
-`npm audit --omit=dev` zawiera 5 pozycji: 3 umiarkowane i 2 wysokie.
+`npm audit --omit=dev` zawiera 5 pozycji: 2 umiarkowane i 3 wysokie.
 
-- `@hono/node-server` → `@modelcontextprotocol/sdk` → `mcp-handler`, 3
-  umiarkowane wpisy dotyczą tego samego traversalu w `serve-static` na
+- `@hono/node-server` i wynikowy wpis `@modelcontextprotocol/sdk`, 2
+  umiarkowane pozycje, dotyczą tego samego traversalu w `serve-static` na
   Windows. Helios jest budowany dla Vercel Linux i nie używa API
   `serve-static`; pakiet nie występuje w trace żadnej trasy aplikacji. To
   istotnie ogranicza osiągalność, ale nie jest gwarancją braku ryzyka.
   Poprawka wskazana przez npm wymaga migracji z `mcp-handler@1.1.0` do 2.x,
   czyli zmiany major i nowego pakietu serwera MCP. Nie została wykonana bez
   osobnego testu kompatybilności protokołu.
-- `sharp@0.34.5` i wynikowy wpis `next`, 2 wysokie pozycje, dotyczą podatności
-  libvips. Helios nie używa `next/image` ani nie przetwarza obrazów, ale
+- `sharp@0.34.5`, wynikowy wpis `next` oraz agregujący ich zależności wpis
+  `mcp-handler`, 3 wysokie pozycje, obejmują podatności libvips. Wpis
+  `mcp-handler` nie jest trzecią niezależną podatnością źródłową; ma poziom
+  wysoki, ponieważ zależy jednocześnie od `next` i podatnego łańcucha SDK.
+  Helios nie używa `next/image` ani nie przetwarza obrazów, ale
   `sharp` znajduje się w ogólnym trace serwera Next.js, więc nie deklarujemy
   go jako całkowicie nieosiągalnego. Stabilna poprawka wymaga `sharp@0.35.x`,
   poza zakresem `^0.34.3` deklarowanym przez Next.js 15.5.22. Wymuszenie

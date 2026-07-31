@@ -192,17 +192,22 @@ Kontrolowane aktualizacje w Fazie 1:
 - `postcss` 8.4.31 → 8.5.25 przez override zgodny z major wersją.
 
 Usunęły one podatności bezpośrednie Next.js, `fast-uri` i PostCSS. Aktualny
-`npm audit --omit=dev` raportuje 5 pozycji: 3 umiarkowane i 2 wysokie.
+`npm audit --omit=dev` raportuje 5 pozycji: 2 umiarkowane i 3 wysokie.
 
-1. `@hono/node-server`, `@modelcontextprotocol/sdk` i `mcp-handler` opisują
-   jeden traversal w `serve-static` na Windows. Helios działa na Vercel Linux,
-   nie wywołuje `serve-static`, a pakiet nie trafia do trace tras builda.
-   Osiągalność jest więc niska, lecz nie zerowa z gwarancją. Poprawka wymaga
-   migracji `mcp-handler` 1.x → 2.x i osobnej walidacji kompatybilności.
-2. `sharp` i wynikowy wpis `next` dotyczą libvips. Helios nie ma obrazów ani
-   `next/image`, lecz `sharp` jest obecny w ogólnym trace serwera Next.js.
-   Poprawiona linia `sharp@0.35.x` leży poza zakresem wspieranym przez
-   `next@15.5.22` (`^0.34.3`). Nie wymuszono nieobsługiwanej wersji.
+1. `@hono/node-server` i wynikowy wpis `@modelcontextprotocol/sdk` to 2
+   umiarkowane pozycje opisujące jeden traversal w `serve-static` na Windows.
+   Helios działa na Vercel Linux, nie wywołuje `serve-static`, a pakiet nie
+   trafia do trace tras builda. Osiągalność jest więc niska, lecz nie zerowa z
+   gwarancją. Poprawka wymaga migracji `mcp-handler` 1.x → 2.x i osobnej
+   walidacji kompatybilności.
+2. `sharp`, wynikowy wpis `next` oraz agregujący ich zależności wpis
+   `mcp-handler` to 3 wysokie pozycje obejmujące libvips. `mcp-handler` nie
+   opisuje trzeciej niezależnej podatności źródłowej; jest klasyfikowany jako
+   wysoki, bo zależy jednocześnie od `next` i podatnego łańcucha SDK. Helios
+   nie ma obrazów ani `next/image`, lecz `sharp` jest obecny w ogólnym trace
+   serwera Next.js. Poprawiona linia `sharp@0.35.x` leży poza zakresem
+   wspieranym przez `next@15.5.22` (`^0.34.3`). Nie wymuszono nieobsługiwanej
+   wersji.
 
 Nie użyto `npm audit fix --force`. Pozostałe ryzyka muszą zostać ponownie
 ocenione przed Production lub przy migracji głównych zależności.
