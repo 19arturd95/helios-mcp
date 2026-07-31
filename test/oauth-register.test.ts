@@ -42,6 +42,19 @@ test("rejestracja bez redirect_uris jest odrzucana", async () => {
   assert.equal(body.error, "invalid_client_metadata");
 });
 
+test("rejestracja ogranicza liczbę redirect_uris i długość client_name", async () => {
+  resetRateLimitState();
+  const tooMany = Array.from({ length: 11 }, (_, i) => `https://client${i}.example.com/cb`);
+  const redirects = await POST(registerReq({ redirect_uris: tooMany }));
+  assert.equal(redirects.status, 400);
+
+  resetRateLimitState();
+  const name = await POST(
+    registerReq({ redirect_uris: ["https://client.example.com/cb"], client_name: "x".repeat(129) }),
+  );
+  assert.equal(name.status, 400);
+});
+
 test("rejestracja z http (nie-localhost) w trybie production jest odrzucana", async () => {
   resetRateLimitState();
   const res = await POST(registerReq({ redirect_uris: ["http://not-localhost.example.com/cb"] }));

@@ -8,8 +8,11 @@
 export function corsHeaders(): Record<string, string> {
   return {
     "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET, POST, OPTIONS",
-    "access-control-allow-headers": "content-type, authorization, mcp-protocol-version",
+    "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
+    "access-control-allow-headers":
+      "authorization, content-type, mcp-protocol-version, mcp-session-id, last-event-id",
+    "access-control-expose-headers": "www-authenticate, mcp-session-id",
+    "access-control-max-age": "86400",
     "cache-control": "no-store",
   };
 }
@@ -18,6 +21,28 @@ export function json(data: unknown, status = 200, extraHeaders: Record<string, s
   return new Response(JSON.stringify(data), {
     status,
     headers: { "content-type": "application/json; charset=utf-8", ...corsHeaders(), ...extraHeaders },
+  });
+}
+
+/**
+ * Dodaje CORS do dowolnej odpowiedzi. Opcjonalnie uzupełnia challenge Bearer
+ * o wymagany scope, czego potrzebują klienci MCP przy odpowiedziach 401/403.
+ */
+export function withCors(response: Response, requiredScope?: string): Response {
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(corsHeaders())) headers.set(name, value);
+
+  if (requiredScope && (response.status === 401 || response.status === 403)) {
+    const challenge = headers.get("www-authenticate");
+    if (challenge && !/(?:^|[, ])scope=/i.test(challenge)) {
+      headers.set("www-authenticate", `${challenge}, scope="${requiredScope}"`);
+    }
+  }
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
   });
 }
 

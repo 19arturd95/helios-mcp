@@ -10,8 +10,9 @@
  * (potencjalnie obcego) redirect_uri trafi kod autoryzacyjny.
  */
 
-import { loadConfig } from "@/lib/config";
-import { issueConsentToken, verifyClientId } from "@/lib/auth/tokens";
+import { isMcpResourceUrl, loadConfig, mcpResourceUrl } from "@/lib/config";
+import { HELIOS_READ_SCOPE, isExactReadScope } from "@/lib/auth/constants";
+import { isValidPkceS256Challenge, issueConsentToken, verifyClientId } from "@/lib/auth/tokens";
 import { isAllowedRedirectUri } from "@/lib/security/redirect";
 import { enforceRateLimit } from "@/lib/security/rateLimit";
 import { randomNonce } from "@/lib/security/signing";
@@ -71,14 +72,17 @@ export async function GET(req: Request) {
   const redirectUri = q.get("redirect_uri") ?? "";
   const codeChallenge = q.get("code_challenge") ?? "";
   const codeChallengeMethod = q.get("code_challenge_method") ?? "";
-  const scope = q.get("scope") ?? "helios.read";
+  const scope = q.get("scope") ?? HELIOS_READ_SCOPE;
   const state = q.get("state") ?? "";
 
   if (responseType !== "code") {
     return htmlError("Błąd autoryzacji", "Obsługiwany jest wyłącznie response_type=code.");
   }
-  if (!codeChallenge || codeChallengeMethod !== "S256") {
-    return htmlError("Błąd autoryzacji", "Wymagane PKCE (code_challenge_method=S256).");
+  if (codeChallengeMethod !== "S256" || !isValidPkceS256Challenge(codeChallenge)) {
+    return htmlError(
+      "Błąd autoryzacji",
+      "Wymagane jest prawidłowe PKCE S256 (code_challenge musi mieć format base64url SHA-256).",
+    );
   }
 
   // Weryfikacja client_id (odrzuca też wygasłe rejestracje — `exp` w JWT)
@@ -101,7 +105,20 @@ export async function GET(req: Request) {
     return htmlError("Błąd autoryzacji", "redirect_uri nie spełnia bieżącej polityki bezpieczeństwa serwera.");
   }
 
-  const resource = q.get("resource") ?? `${cfg.baseUrl}/api/mcp`;
+  if (!isExactReadScope(scope)) {
+    return htmlError("Błąd autoryzacji", `Obsługiwany jest wyłącznie scope=${HELIOS_READ_SCOPE}.`);
+  }
+
+  // MCP 2025-11-25 wymaga Resource Indicators (RFC 8707) zarówno w żądaniu
+  // autoryzacji, jak i później w żądaniu tokenu. Brak lub inny zasób odrzucamy.
+  const resources = q.getAll("resource");
+  const resource = resources.length === 1 ? resources[0]! : "";
+  if (!isMcpResourceUrl(resource, cfg.baseUrl)) {
+    return htmlError(
+      "Błąd autoryzacji",
+      `Parametr resource musi wskazywać dokładnie ${mcpResourceUrl(cfg.baseUrl)}.`,
+    );
+  }
   let redirectHost: string;
   try {
     redirectHost = new URL(redirectUri).host;

@@ -42,6 +42,8 @@ export interface AppsScriptExports {
   MAX_TREE_NODES: number;
   MAX_SEARCH_SCAN: number;
   MAX_SEARCH_CONTENT_READS: number;
+  MAX_NOTE_BYTES: number;
+  MAX_SEARCH_CONTENT_BYTES: number;
   READ_OPS: Record<string, boolean>;
   META_OPS: Record<string, boolean>;
 }
@@ -108,6 +110,7 @@ export interface FakeFile {
   getName(): string;
   getMimeType(): string;
   getLastUpdated(): Date;
+  getSize(): number;
   getBlob(): { getDataAsString(): string; getBytes(): { length: number } };
   getParents(): { hasNext(): boolean; next(): FakeFolder };
   _isFile: true;
@@ -175,6 +178,7 @@ export function createFakeGasEnv(scriptProps: Record<string, string> = {}): Fake
       getName: () => state.name,
       getMimeType: () => state.mimeType,
       getLastUpdated: () => state.lastUpdated,
+      getSize: () => Buffer.byteLength(state.content, "utf8"),
       getBlob: () => ({
         getDataAsString: () => state.content,
         getBytes: () => ({ length: Buffer.byteLength(state.content, "utf8") }),

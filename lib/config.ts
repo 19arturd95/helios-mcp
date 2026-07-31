@@ -44,6 +44,21 @@ export function mcpResourceUrl(baseUrl: string): string {
   return `${baseUrl.replace(/\/+$/, "")}/api/mcp`;
 }
 
+/**
+ * Porównuje parametr OAuth `resource` z kanonicznym adresem Helios MCP.
+ * URL normalizuje wielkość liter schematu/hosta, ale ścieżka i pozostałe
+ * elementy nadal muszą odpowiadać dokładnie zasobowi z metadanych RFC 9728.
+ */
+export function isMcpResourceUrl(value: string, baseUrl: string): boolean {
+  try {
+    const actual = new URL(value);
+    const expected = new URL(mcpResourceUrl(baseUrl));
+    return actual.hash === "" && actual.toString() === expected.toString();
+  } catch {
+    return false;
+  }
+}
+
 const REQUIRED_KEYS = [
   "ALLOWED_EMAIL",
   "PUBLIC_BASE_URL",
@@ -69,22 +84,61 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
 
   const authSecret = env.AUTH_SECRET!.trim();
   const appsScriptSecret = env.APPS_SCRIPT_SECRET!.trim();
-  if (authSecret.length < 16 || appsScriptSecret.length < 16) {
+  if (authSecret.length < 32 || appsScriptSecret.length < 32) {
     throw new Error(
-      "Sekrety AUTH_SECRET i APPS_SCRIPT_SECRET muszą mieć co najmniej 16 znaków (zalecane 32+).",
+      "Sekrety AUTH_SECRET i APPS_SCRIPT_SECRET muszą mieć co najmniej 32 znaki.",
     );
   }
 
+  const allowedEmail = env.ALLOWED_EMAIL!.trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(allowedEmail)) {
+    throw new Error("ALLOWED_EMAIL nie jest prawidłowym adresem e-mail.");
+  }
+
+  let baseUrl: URL;
+  let appsScriptUrl: URL;
+  try {
+    baseUrl = new URL(env.PUBLIC_BASE_URL!.trim());
+    appsScriptUrl = new URL(env.APPS_SCRIPT_URL!.trim());
+  } catch {
+    throw new Error("PUBLIC_BASE_URL i APPS_SCRIPT_URL muszą być prawidłowymi adresami URL.");
+  }
+  const isProduction = (env.NODE_ENV ?? "development") === "production";
+  const isLocalBase =
+    baseUrl.protocol === "http:" &&
+    (baseUrl.hostname === "localhost" || baseUrl.hostname === "127.0.0.1");
+  if ((isProduction && baseUrl.protocol !== "https:") || (!isProduction && baseUrl.protocol !== "https:" && !isLocalBase)) {
+    throw new Error("PUBLIC_BASE_URL musi używać HTTPS (HTTP jest dozwolone tylko lokalnie poza produkcją).");
+  }
+  if (
+    baseUrl.username ||
+    baseUrl.password ||
+    baseUrl.pathname !== "/" ||
+    baseUrl.search ||
+    baseUrl.hash
+  ) {
+    throw new Error("PUBLIC_BASE_URL musi być samym originem, bez ścieżki, danych logowania, query ani fragmentu.");
+  }
+  if (
+    appsScriptUrl.protocol !== "https:" ||
+    appsScriptUrl.hostname !== "script.google.com" ||
+    !/^\/macros\/s\/[^/]+\/exec$/.test(appsScriptUrl.pathname) ||
+    appsScriptUrl.search ||
+    appsScriptUrl.hash
+  ) {
+    throw new Error("APPS_SCRIPT_URL musi być adresem wdrożenia Apps Script zakończonym /exec.");
+  }
+
   return {
-    allowedEmail: env.ALLOWED_EMAIL!.trim().toLowerCase(),
-    baseUrl: env.PUBLIC_BASE_URL!.trim().replace(/\/+$/, ""),
-    appsScriptUrl: env.APPS_SCRIPT_URL!.trim(),
+    allowedEmail,
+    baseUrl: baseUrl.origin,
+    appsScriptUrl: appsScriptUrl.toString(),
     appsScriptSecret,
     authSecret,
     googleClientId: env.GOOGLE_CLIENT_ID!.trim(),
     googleClientSecret: env.GOOGLE_CLIENT_SECRET!.trim(),
     allowedRedirectUris: parseRedirectAllowlist(env.ALLOWED_OAUTH_REDIRECT_URIS),
-    allowLocalhostRedirect: (env.NODE_ENV ?? "development") !== "production",
+    allowLocalhostRedirect: !isProduction,
   };
 }
 

@@ -59,7 +59,17 @@ function mountFakeAppsScript() {
   return { restore: () => void (globalThis.fetch = original) };
 }
 
-async function makeCode(overrides: Partial<{ email: string; clientId: string; redirectUri: string; now: number; ttl: number }> = {}) {
+async function makeCode(
+  overrides: Partial<{
+    email: string;
+    clientId: string;
+    redirectUri: string;
+    scope: string;
+    resource: string;
+    now: number;
+    ttl: number;
+  }> = {},
+) {
   return issueAuthorizationCode(
     AUTH_SECRET,
     BASE_URL,
@@ -68,16 +78,16 @@ async function makeCode(overrides: Partial<{ email: string; clientId: string; re
       clientId: overrides.clientId ?? CLIENT_ID,
       redirectUri: overrides.redirectUri ?? REDIRECT_URI,
       codeChallenge: CHALLENGE,
-      scope: "helios.read",
-      resource: RESOURCE,
+      scope: overrides.scope ?? "helios.read",
+      resource: overrides.resource ?? RESOURCE,
     },
     overrides.ttl ?? 60,
     overrides.now,
   );
 }
 
-function tokenReq(fields: Record<string, string>): Request {
-  const form = new URLSearchParams(fields);
+function tokenReq(fields: Record<string, string>, includeResource = true): Request {
+  const form = new URLSearchParams(includeResource ? { resource: RESOURCE, ...fields } : fields);
   return new Request("https://helios.example.com/oauth/token", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded", "x-forwarded-for": "203.0.113.30" },
@@ -154,6 +164,44 @@ test("brak redirect_uri jest odrzucany", async () => {
   assert.equal(res.status, 400);
   const body = await res.json();
   assert.equal(body.error, "invalid_request");
+});
+
+test("brak resource jest odrzucany", async () => {
+  resetRateLimitState();
+  const code = await makeCode();
+  const res = await tokenPost(
+    tokenReq(
+      {
+        grant_type: "authorization_code",
+        code,
+        code_verifier: VERIFIER,
+        client_id: CLIENT_ID,
+        redirect_uri: REDIRECT_URI,
+      },
+      false,
+    ),
+  );
+  assert.equal(res.status, 400);
+  const body = await res.json();
+  assert.equal(body.error, "invalid_request");
+});
+
+test("resource niezgodny z kodem lub serwerem jest odrzucany", async () => {
+  resetRateLimitState();
+  const code = await makeCode();
+  const res = await tokenPost(
+    tokenReq({
+      grant_type: "authorization_code",
+      code,
+      code_verifier: VERIFIER,
+      client_id: CLIENT_ID,
+      redirect_uri: REDIRECT_URI,
+      resource: "https://evil.example.com/api/mcp",
+    }),
+  );
+  assert.equal(res.status, 400);
+  const body = await res.json();
+  assert.equal(body.error, "invalid_target");
 });
 
 test("niedopasowany client_id jest odrzucany", async () => {
@@ -257,6 +305,23 @@ test("konto inne niż ALLOWED_EMAIL jest odrzucane (obrona w głąb, niezależni
   assert.equal(res.status, 403);
   const body = await res.json();
   assert.equal(body.error, "access_denied");
+});
+
+test("kod z zakresem innym niż helios.read jest odrzucany", async () => {
+  resetRateLimitState();
+  const code = await makeCode({ scope: "helios.write" });
+  const res = await tokenPost(
+    tokenReq({
+      grant_type: "authorization_code",
+      code,
+      code_verifier: VERIFIER,
+      client_id: CLIENT_ID,
+      redirect_uri: REDIRECT_URI,
+    }),
+  );
+  assert.equal(res.status, 400);
+  const body = await res.json();
+  assert.equal(body.error, "invalid_scope");
 });
 
 test("niedostępność Helios Drive Adapter powoduje bezpieczną odmowę (fail-closed), nie wyciek sekretu", async () => {

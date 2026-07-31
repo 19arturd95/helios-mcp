@@ -81,6 +81,15 @@ test("read: notatka spoza folderu nie jest osiągalna przez path (brak operacji 
   assert.throws(() => gas.dispatch_({ op: "read", path: "secret.md" }, env.props), /nie istnieje/);
 });
 
+test("read: zbyt duża notatka jest odrzucana przed zwróceniem treści", () => {
+  const { env, gas } = makeEnv();
+  env.root.createFile("duza.md", "x".repeat(gas.MAX_NOTE_BYTES + 1), "text/markdown");
+  assert.throws(
+    () => gas.dispatch_({ op: "read", path: "duza.md" }, env.props),
+    /przekracza limit rozmiaru/,
+  );
+});
+
 test("consumeAuthCode_: pierwsza wymiana się udaje, druga (replay) jest odrzucana", () => {
   const { env, gas } = makeEnv();
   const exp = Math.floor(Date.now() / 1000) + 60;
@@ -145,6 +154,20 @@ test("search: limit liczby odczytów treści (MAX_SEARCH_CONTENT_READS) obcina w
   const total = gas.MAX_SEARCH_CONTENT_READS + 20;
   // Nazwy plików NIE zawierają frazy — wymusza odczyt treści każdego pliku.
   for (let i = 0; i < total; i++) wiki.createFile(`note-${i}.md`, "brak dopasowania w tresci", "text/markdown");
+
+  const result = gas.opSearch_(env.root, { query: "nigdzieniewystepujacafraza", limit: 50 });
+  assert.equal(result.truncated, true);
+  assert.equal(result.hits.length, 0);
+});
+
+test("search: łączny limit bajtów treści kończy skan i ustawia truncated=true", () => {
+  const { env, gas } = makeEnv();
+  const wiki = env.root.createFolder("20 Wiki");
+  const chunk = "x".repeat(gas.MAX_NOTE_BYTES);
+  const filesToExceedBudget = Math.floor(gas.MAX_SEARCH_CONTENT_BYTES / gas.MAX_NOTE_BYTES) + 2;
+  for (let i = 0; i < filesToExceedBudget; i++) {
+    wiki.createFile(`note-${i}.md`, chunk, "text/markdown");
+  }
 
   const result = gas.opSearch_(env.root, { query: "nigdzieniewystepujacafraza", limit: 50 });
   assert.equal(result.truncated, true);

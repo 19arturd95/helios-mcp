@@ -23,6 +23,11 @@ test("nieprawidłowy URL jest odrzucany", () => {
   assert.equal(isAllowedRedirectUri("", { allowLocalhost: false }), false);
 });
 
+test("redirect_uri z fragmentem lub danymi logowania jest odrzucany", () => {
+  assert.equal(isAllowedRedirectUri("https://client.example.com/cb#fragment", { allowLocalhost: false }), false);
+  assert.equal(isAllowedRedirectUri("https://user:pass@client.example.com/cb", { allowLocalhost: false }), false);
+});
+
 test("allowlista: dokładne dopasowanie przechodzi, wszystko inne jest odrzucane (fail-closed)", () => {
   const policy = {
     allowLocalhost: false,

@@ -77,6 +77,7 @@ test("Odrzuć: wraca do redirect_uri klienta z error=access_denied, BEZ kodu", a
   assert.equal(url.searchParams.get("error"), "access_denied");
   assert.equal(url.searchParams.get("code"), null);
   assert.equal(url.searchParams.get("state"), "abc-state");
+  assert.equal(url.searchParams.get("iss"), BASE_URL);
 });
 
 test("brak dopasowania CSRF (cookie != pole formularza) jest odrzucany, bez przekierowania", async () => {

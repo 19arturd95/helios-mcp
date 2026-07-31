@@ -9,7 +9,7 @@ OAuth (i jego ryzyka), strukturę plików, koszty oraz podział na fazy.
 ChatGPT / Claude / klient MCP
         │  OAuth Bearer token (Streamable HTTP)
         ▼
-Helios MCP  =  Next.js (App Router) na Vercel Hobby   →  /api/mcp
+Helios MCP  =  Next.js (App Router), hosting jeszcze niewybrany   →  /api/mcp
         │  JSON: { timestamp, nonce, payload, signature }  (HMAC-SHA256)
         ▼
 Helios Drive Adapter  =  Google Apps Script Web App
@@ -21,7 +21,7 @@ Google Drive / folder „helios" (pliki .md)
 Granice zaufania:
 - **Klient ↔ MCP**: chroniony OAuth-em. Tylko `ALLOWED_EMAIL`.
 - **MCP ↔ Apps Script**: chroniony podpisem HMAC + nonce + oknem czasu.
-- **Notatki**: żyją tylko na Drive. Vercel i repozytorium nie przechowują treści.
+- **Notatki**: żyją tylko na Drive. Serwer MCP i repozytorium nie przechowują treści.
 
 ## 2. OAuth — wybór i ryzyka
 
@@ -40,7 +40,8 @@ Przepływ:
    danych. Redirect_uris muszą być `https` (lub `http://localhost` wyłącznie
    w trybie development) i — jeśli skonfigurowano `ALLOWED_OAUTH_REDIRECT_URIS`
    — dokładnie wymienione na tej allowliście (fail-closed, bez wildcardów).
-3. `/oauth/authorize` (PKCE S256) waliduje żądanie i renderuje **ekran
+3. `/oauth/authorize` wymaga kanonicznego `resource`, wyłącznie scope
+   `helios.read` oraz prawidłowego PKCE S256, po czym renderuje **ekran
    zgody** (HTML, GET) — pokazuje nazwę klienta i host redirect_uri.
    NIE przekierowuje automatycznie do Google.
 4. Użytkownik świadomie klika „Zezwól" → `POST /oauth/consent` (chronione
@@ -54,15 +55,18 @@ Przepływ:
    Google (issuer/audience), sprawdza `email_verified` i `ALLOWED_EMAIL`
    (wydzielone do `lib/auth/googleIdentity.ts`), a następnie wystawia
    **nasz** krótki kod autoryzacyjny (z losowym `jti`).
-6. `/oauth/token` wymaga `client_id`/`redirect_uri` (dokładna zgodność z
-   kodem), weryfikuje PKCE, sprawdza e-mail (obrona w głąb), a następnie
+6. `/oauth/token` wymaga `client_id`/`redirect_uri`/`resource` (dokładna
+   zgodność z kodem i zasobem `/api/mcp`), weryfikuje PKCE i scope
+   `helios.read`, sprawdza e-mail (obrona w głąb), a następnie
    **atomowo zużywa `jti`** przez Helios Drive Adapter
    (`consumeAuthCode` — Apps Script `LockService` + `PropertiesService`,
    przechowuje wyłącznie `jti` + `exp`, nigdy kod/token) — druga wymiana
    tego samego kodu jest odrzucana (`invalid_grant`). Awaria adaptera →
    odmowa (fail-closed), nie ryzykujemy powtórnego użycia. Dopiero wtedy
    wystawiany jest **access token** (JWT, audience = `/api/mcp`, TTL 1 h).
-7. `/api/mcp` (`withMcpAuth`) weryfikuje token i ponownie sprawdza e-mail.
+7. `/api/mcp` (`withMcpAuth`) weryfikuje token, audience, scope i e-mail.
+   Challenge 401 wskazuje stałe `resource_metadata` z `PUBLIC_BASE_URL` oraz
+   scope `helios.read`; pełne CORS obejmuje również 401/403 i preflight.
 
 Stan jest w większości **bezstanowy** (wszystko podpisane `AUTH_SECRET`);
 jedynym stanem serwerowym jest zbiór zużytych `jti` kodów autoryzacyjnych
@@ -76,13 +80,13 @@ nadal bez Redisa i bez bazy danych, zgodnie z planem Hobby.
 - *Unieważnianie tokenu*: przy modelu bezstanowym trudniejsze → krótki TTL
   (1 h) i rotacja `AUTH_SECRET` (natychmiast unieważnia wszystkie tokeny).
 - *Brak testu E2E offline*: pełny handshake (w tym weryfikacja `id_token`
-  przez prawdziwe JWKS Google) testujemy dopiero na Preview — `jose` na
+  przez prawdziwe JWKS Google) testujemy dopiero po wdrożeniu testowym — `jose` na
   Node pobiera JWKS przez `node:https` bezpośrednio, z pominięciem globalnego
   `fetch`, więc nie da się tego sensownie zamockować w testach jednostkowych.
   Logika decyzyjna PO weryfikacji podpisu (email/email_verified/ALLOWED_EMAIL)
   jest wydzielona do `lib/auth/googleIdentity.ts` i w pełni testowana.
 - *Rate limiting jest best-effort*: licznik działa w pamięci pojedynczej
-  instancji serverless — na Vercel Hobby nie ma gwarancji współdzielenia
+  instancji serverless — typowy hosting serverless nie gwarantuje współdzielenia
   stanu między instancjami/cold-startami. To warstwa odstraszająca, nie
   twarda gwarancja globalnego limitu (patrz README).
 - *Otwarty DCR*: złagodzony obowiązkowym ekranem zgody (użytkownik zawsze
@@ -112,6 +116,7 @@ lib/
   drive/client.ts         # podpisane żądanie do Apps Script (bez wycieku sekretów)
   drive/types.ts
   auth/tokens.ts          # JWT: client_id / kod (z jti) / state / zgoda / access token + PKCE
+  auth/constants.ts       # jedyny scope Fazy 1
   auth/verifyToken.ts     # Resource Server: Bearer → e-mail → ALLOWED_EMAIL
   auth/googleIdentity.ts  # ocena tożsamości Google (email/email_verified) — czysta funkcja
   auth/metadata.ts        # metadane OAuth
@@ -129,7 +134,7 @@ test/                     # testy bezpieczeństwa (node:test + tsx), w tym testy
 
 | Usługa | Rola | Koszt | Karta |
 |---|---|---|---|
-| Vercel Hobby | hosting `/api/*` | 0 zł | nie |
+| Vercel Hobby (opcjonalnie) | możliwy hosting `/api/*` | 0 zł | nie |
 | Google Cloud OAuth Client | logowanie | 0 zł | nie |
 | Google Apps Script | adapter Drive | 0 zł (limity dzienne) | nie |
 | Google Drive | notatki | konto | nie |
@@ -158,11 +163,13 @@ tokenu OAuth, błędny token, dozwolony `ALLOWED_EMAIL`, odrzucenie innego
 adresu, brak wycieku sekretów — oraz (po audycie bezpieczeństwa): ekran
 zgody (renderowanie, CSRF, odrzucenie, wygasły/podrobiony stan), allowlista
 i walidacja redirect_uri (w tym ochrona przed open redirect), DCR (wygasły
-`client_id`), PKCE (brak, zła metoda, zły `code_verifier`), wymagany
-`client_id`/`redirect_uri` w `/oauth/token`, jednorazowość kodu
+`client_id`), PKCE (brak, zła metoda, format i zły `code_verifier`), wymagany
+`client_id`/`redirect_uri`/`resource` w `/oauth/token`, jednorazowość kodu
 autoryzacyjnego (replay odrzucony przez `consumeAuthCode`), wygasły kod,
 `email_verified`/`ALLOWED_EMAIL` (`googleIdentity`), limity `listTree`/
-`search` (`truncated`), brak operacji i eksportów zapisu w Code.gs niezależnie
+`search` (`truncated`, limity liczby i bajtów), limit 200 KiB pojedynczej
+notatki, CORS MCP dla preflight/401/403, scope `helios.read`, brak operacji i
+eksportów zapisu w Code.gs niezależnie
 od właściwości skryptu, nieznana operacja Apps Script, `assertDescendant_`
 dla pliku spoza `ROOT_FOLDER_ID`, rate limiting (`429` + `Retry-After`).
 
@@ -177,10 +184,10 @@ nie jest testowana na poziomie HTTP (jose na Node pobiera JWKS przez
 sensownie zamockować) — logika PO weryfikacji podpisu jest wydzielona do
 `lib/auth/googleIdentity.ts` i tam w pełni testowana.
 
-Aktualny wynik: 100 testów, 100 zaliczonych, 0 pominiętych. Oba typechecki i
+Aktualny wynik: 115 testów, 115 zaliczonych, 0 pominiętych. Oba typechecki i
 produkcyjny build Next.js przechodzą. Build nie wymaga sekretów. Pełny E2E
 OAuth z prawdziwym Google JWKS oraz klientami Claude i ChatGPT nie został
-wykonany, ponieważ nie ma jeszcze wdrożenia Preview.
+wykonany, ponieważ nie ma jeszcze wybranego ani skonfigurowanego hostingu.
 
 ## 7. Zależności i audyt
 
@@ -192,13 +199,17 @@ Kontrolowane aktualizacje w Fazie 1:
 - `postcss` 8.4.31 → 8.5.25 przez override zgodny z major wersją.
 
 Usunęły one podatności bezpośrednie Next.js, `fast-uri` i PostCSS. Aktualny
-`npm audit --omit=dev` raportuje 5 pozycji: 2 umiarkowane i 3 wysokie.
+`npm audit --omit=dev` raportuje te same 5 wpisów pakietów. npm 10.9.4
+(CI/Node 20) grupuje je jako 2 umiarkowane i 3 wysokie, a npm 11.9.0 jako 3
+umiarkowane i 2 wysokie. Zmienia się wyłącznie agregacja wpisu `mcp-handler`;
+źródłem pozostają te same 2 advisory opisane poniżej.
 
 1. `@hono/node-server` i wynikowy wpis `@modelcontextprotocol/sdk` to 2
    umiarkowane pozycje opisujące jeden traversal w `serve-static` na Windows.
-   Helios działa na Vercel Linux, nie wywołuje `serve-static`, a pakiet nie
-   trafia do trace tras builda. Osiągalność jest więc niska, lecz nie zerowa z
-   gwarancją. Poprawka wymaga migracji `mcp-handler` 1.x → 2.x i osobnej
+   CI i lokalny build kontrolny działają na Linuxie, Helios nie wywołuje
+   `serve-static`, a pakiet nie trafia do trace tras builda. Osiągalność jest
+   więc niska, lecz nie zerowa z gwarancją. Hosting na Windows wymagałby
+   ponownej oceny. Poprawka wymaga migracji `mcp-handler` 1.x → 2.x i osobnej
    walidacji kompatybilności.
 2. `sharp`, wynikowy wpis `next` oraz agregujący ich zależności wpis
    `mcp-handler` to 3 wysokie pozycje obejmujące libvips. `mcp-handler` nie

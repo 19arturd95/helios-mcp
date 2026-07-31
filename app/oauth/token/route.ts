@@ -7,7 +7,8 @@
  * token (JWT) z audience = zasób /api/mcp. Bez refresh tokenu (krótki TTL).
  */
 
-import { loadConfig, mcpResourceUrl } from "@/lib/config";
+import { isMcpResourceUrl, loadConfig, mcpResourceUrl } from "@/lib/config";
+import { HELIOS_READ_SCOPE, isExactReadScope } from "@/lib/auth/constants";
 import { issueAccessToken, verifyAuthorizationCode, verifyPkceS256 } from "@/lib/auth/tokens";
 import { callAdapter, DriveAdapterError } from "@/lib/drive/client";
 import type { ConsumeAuthCodeResult } from "@/lib/drive/types";
@@ -46,6 +47,7 @@ export async function POST(req: Request) {
   const codeVerifier = body.code_verifier ?? "";
   const clientId = body.client_id ?? "";
   const redirectUri = body.redirect_uri ?? "";
+  const resource = body.resource ?? "";
 
   // client_id i redirect_uri są obowiązkowe (RFC 6749 §4.1.3 dla klienta
   // publicznego, który podawał redirect_uri w /oauth/authorize).
@@ -54,6 +56,12 @@ export async function POST(req: Request) {
   }
   if (!redirectUri) {
     return oauthError("invalid_request", "Wymagane pole redirect_uri.");
+  }
+  if (!resource) {
+    return oauthError("invalid_request", "Wymagane pole resource.");
+  }
+  if (!isMcpResourceUrl(resource, cfg.baseUrl)) {
+    return oauthError("invalid_target", "Parametr resource nie wskazuje tego serwera MCP.");
   }
 
   let claims;
@@ -68,6 +76,12 @@ export async function POST(req: Request) {
   }
   if (redirectUri !== claims.redirectUri) {
     return oauthError("invalid_grant", "redirect_uri nie pasuje do kodu.");
+  }
+  if (!isMcpResourceUrl(claims.resource, cfg.baseUrl) || resource !== claims.resource) {
+    return oauthError("invalid_grant", "resource nie pasuje do kodu.");
+  }
+  if (!isExactReadScope(claims.scope)) {
+    return oauthError("invalid_scope", `Kod nie zawiera wymaganego scope ${HELIOS_READ_SCOPE}.`);
   }
   if (!claims.jti) {
     // Kod bez jti (nie powinno się zdarzyć dla kodów wystawionych przez ten
@@ -112,7 +126,7 @@ export async function POST(req: Request) {
     audience: mcpResourceUrl(cfg.baseUrl),
     email: claims.email,
     clientId: claims.clientId,
-    scope: claims.scope || "helios.read",
+    scope: HELIOS_READ_SCOPE,
     ttlSeconds: 3600,
   });
 
@@ -120,7 +134,7 @@ export async function POST(req: Request) {
     access_token: accessToken,
     token_type: "Bearer",
     expires_in: 3600,
-    scope: claims.scope || "helios.read",
+    scope: HELIOS_READ_SCOPE,
   });
 }
 

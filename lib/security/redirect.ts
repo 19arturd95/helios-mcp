@@ -25,6 +25,10 @@ export function isAllowedRedirectUri(uri: string, policy: RedirectPolicy): boole
     return false;
   }
 
+  // OAuth redirect_uri nie może zawierać fragmentu. Dane użytkownika w URL
+  // również odrzucamy, żeby ekran zgody nie maskował mylących adresów.
+  if (u.hash || u.username || u.password) return false;
+
   const isHttps = u.protocol === "https:";
   const isLocalDev =
     policy.allowLocalhost &&

@@ -8,6 +8,7 @@
  */
 
 import { loadConfig, mcpResourceUrl, type HeliosConfig } from "../config";
+import { HELIOS_READ_SCOPE } from "./constants";
 import { verifyAccessToken } from "./tokens";
 
 /** Struktura zgodna z `AuthInfo` z MCP SDK. */
@@ -41,10 +42,14 @@ export async function verifyMcpBearer(
     if (!email || email !== cfg.allowedEmail) {
       return undefined; // niedozwolone konto
     }
+    const scopes = verified.scope.split(" ").filter(Boolean);
+    if (!scopes.includes(HELIOS_READ_SCOPE)) {
+      return undefined; // token bez minimalnego scope odczytu
+    }
     return {
       token: bearerToken,
       clientId: verified.clientId,
-      scopes: verified.scope ? verified.scope.split(" ").filter(Boolean) : [],
+      scopes,
       expiresAt: verified.exp,
       extra: { email },
     };

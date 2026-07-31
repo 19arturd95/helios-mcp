@@ -17,6 +17,8 @@ delete process.env.ALLOWED_OAUTH_REDIRECT_URIS;
 
 const AUTH_SECRET = process.env.AUTH_SECRET!;
 const BASE_URL = process.env.PUBLIC_BASE_URL!;
+const RESOURCE = `${BASE_URL}/api/mcp`;
+const CHALLENGE = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
 
 async function registeredClientId(redirectUris: string[], clientName = "Demo Client"): Promise<string> {
   return issueClientId(AUTH_SECRET, BASE_URL, { redirectUris, clientName });
@@ -49,7 +51,7 @@ test("brak PKCE (code_challenge) jest odrzucany", async () => {
 test("code_challenge_method inny niż S256 jest odrzucany", async () => {
   resetRateLimitState();
   const res = await authorizeGet(
-    authorizeReq({ response_type: "code", code_challenge: "xyz", code_challenge_method: "plain" }),
+    authorizeReq({ response_type: "code", code_challenge: CHALLENGE, code_challenge_method: "plain" }),
   );
   assert.equal(res.status, 400);
   assert.match(await res.text(), /S256/);
@@ -60,7 +62,7 @@ test("nieznany client_id jest odrzucany", async () => {
   const res = await authorizeGet(
     authorizeReq({
       response_type: "code",
-      code_challenge: "xyz",
+      code_challenge: CHALLENGE,
       code_challenge_method: "S256",
       client_id: "not-a-real-jwt",
       redirect_uri: "https://client.example.com/cb",
@@ -83,7 +85,7 @@ test("wygasły client_id (rejestracja DCR) jest odrzucany", async () => {
   const res = await authorizeGet(
     authorizeReq({
       response_type: "code",
-      code_challenge: "xyz",
+      code_challenge: CHALLENGE,
       code_challenge_method: "S256",
       client_id: expiredClientId,
       redirect_uri: "https://client.example.com/cb",
@@ -99,7 +101,7 @@ test("redirect_uri spoza zarejestrowanych dla klienta jest odrzucany (ochrona pr
   const res = await authorizeGet(
     authorizeReq({
       response_type: "code",
-      code_challenge: "xyz",
+      code_challenge: CHALLENGE,
       code_challenge_method: "S256",
       client_id: clientId,
       redirect_uri: "https://evil.example.com/cb",
@@ -115,10 +117,12 @@ test("poprawne żądanie renderuje ekran zgody (nie przekierowuje automatycznie 
   const res = await authorizeGet(
     authorizeReq({
       response_type: "code",
-      code_challenge: "xyz",
+      code_challenge: CHALLENGE,
       code_challenge_method: "S256",
       client_id: clientId,
       redirect_uri: "https://client.example.com/cb",
+      scope: "helios.read",
+      resource: RESOURCE,
       state: "client-state-123",
     }),
   );
@@ -146,6 +150,47 @@ test("poprawne żądanie renderuje ekran zgody (nie przekierowuje automatycznie 
   assert.match(setCookie, /HttpOnly/);
 });
 
+test("brak wymaganego parametru resource jest odrzucany", async () => {
+  resetRateLimitState();
+  const clientId = await registeredClientId(["https://client.example.com/cb"]);
+  const res = await authorizeGet(
+    authorizeReq({
+      response_type: "code",
+      code_challenge: CHALLENGE,
+      code_challenge_method: "S256",
+      client_id: clientId,
+      redirect_uri: "https://client.example.com/cb",
+      scope: "helios.read",
+    }),
+  );
+  assert.equal(res.status, 400);
+  assert.match(await res.text(), /resource/);
+});
+
+test("inny resource lub scope zapisu jest odrzucany", async () => {
+  resetRateLimitState();
+  const clientId = await registeredClientId(["https://client.example.com/cb"]);
+  const base = {
+    response_type: "code",
+    code_challenge: CHALLENGE,
+    code_challenge_method: "S256",
+    client_id: clientId,
+    redirect_uri: "https://client.example.com/cb",
+  };
+  const wrongResource = await authorizeGet(
+    authorizeReq({ ...base, scope: "helios.read", resource: "https://evil.example.com/api/mcp" }),
+  );
+  assert.equal(wrongResource.status, 400);
+  assert.match(await wrongResource.text(), /resource/);
+
+  resetRateLimitState();
+  const wrongScope = await authorizeGet(
+    authorizeReq({ ...base, scope: "helios.write", resource: RESOURCE }),
+  );
+  assert.equal(wrongScope.status, 400);
+  assert.match(await wrongScope.text(), /scope/);
+});
+
 test("rate limiting: więcej niż 20 żądań z tego samego IP w oknie 5 min zwraca 429", async () => {
   resetRateLimitState();
   const clientId = await registeredClientId(["https://client.example.com/cb"]);
@@ -156,10 +201,12 @@ test("rate limiting: więcej niż 20 żądań z tego samego IP w oknie 5 min zwr
       authorizeReq(
         {
           response_type: "code",
-          code_challenge: "xyz",
+          code_challenge: CHALLENGE,
           code_challenge_method: "S256",
           client_id: clientId,
           redirect_uri: "https://client.example.com/cb",
+          scope: "helios.read",
+          resource: RESOURCE,
         },
         ip,
       ),

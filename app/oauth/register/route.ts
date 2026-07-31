@@ -33,9 +33,20 @@ export async function POST(req: Request) {
     return oauthError("invalid_client_metadata", "Treść żądania musi być JSON-em.");
   }
 
-  const redirectUris = Array.isArray(body.redirect_uris) ? body.redirect_uris.map(String) : [];
-  if (redirectUris.length === 0) {
-    return oauthError("invalid_client_metadata", "Wymagane pole redirect_uris.");
+  const rawRedirectUris = Array.isArray(body.redirect_uris) ? body.redirect_uris : [];
+  if (
+    rawRedirectUris.length === 0 ||
+    rawRedirectUris.length > 10 ||
+    !rawRedirectUris.every((uri) => typeof uri === "string" && uri.length > 0 && uri.length <= 2048)
+  ) {
+    return oauthError(
+      "invalid_client_metadata",
+      "redirect_uris musi zawierać od 1 do 10 poprawnych adresów tekstowych (maks. 2048 znaków każdy).",
+    );
+  }
+  const redirectUris = [...new Set(rawRedirectUris as string[])];
+  if (redirectUris.join("").length > 4096) {
+    return oauthError("invalid_client_metadata", "Łączna długość redirect_uris przekracza limit.");
   }
   const policy = { allowedRedirectUris: cfg.allowedRedirectUris, allowLocalhost: cfg.allowLocalhostRedirect };
   if (!redirectUris.every((uri) => isAllowedRedirectUri(uri, policy))) {
@@ -45,7 +56,10 @@ export async function POST(req: Request) {
     );
   }
 
-  const clientName = typeof body.client_name === "string" ? body.client_name : undefined;
+  const clientName = typeof body.client_name === "string" ? body.client_name.trim() : undefined;
+  if (clientName && clientName.length > 128) {
+    return oauthError("invalid_client_metadata", "client_name może mieć maksymalnie 128 znaków.");
+  }
   const clientId = await issueClientId(cfg.authSecret, cfg.baseUrl, { redirectUris, clientName });
 
   return json(

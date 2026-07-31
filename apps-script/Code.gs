@@ -35,9 +35,9 @@ var ALLOWED_EXTENSIONS = ['.md'];
 var MAX_TREE_NODES = 500;       // maksymalna liczba węzłów (folderów+plików) w drzewie
 var MAX_SEARCH_SCAN = 800;      // maksymalna liczba plików przejrzanych (nazwa) w search
 var MAX_SEARCH_CONTENT_READS = 200; // maksymalna liczba odczytów TREŚCI pliku w search
-// Przybliżony górny limit rozmiaru odpowiedzi JSON (dokumentacyjny — wynika
-// z MAX_TREE_NODES/MAX_SEARCH_SCAN; patrz README → „Limity listTree/search”).
 var MAX_RESPONSE_BYTES = 200 * 1024;
+var MAX_NOTE_BYTES = MAX_RESPONSE_BYTES; // pojedynczy odczyt nie może zwrócić dowolnie dużego pliku
+var MAX_SEARCH_CONTENT_BYTES = 2 * 1024 * 1024; // łączny budżet treści jednego wyszukiwania
 
 var READ_OPS = { status: true, listTree: true, search: true, read: true };
 // Operacje "meta" (bezpieczeństwo OAuth) — nie modyfikują vaulta Helios.
@@ -451,10 +451,12 @@ function opSearch_(root, request) {
   var hits = [];
   var scanned = 0;
   var contentReads = 0;
+  var contentBytes = 0;
   var truncated = false;
 
   function budgetExhausted() {
-    return hits.length >= limit || scanned >= MAX_SEARCH_SCAN || contentReads >= MAX_SEARCH_CONTENT_READS;
+    return hits.length >= limit || scanned >= MAX_SEARCH_SCAN ||
+      contentReads >= MAX_SEARCH_CONTENT_READS || contentBytes >= MAX_SEARCH_CONTENT_BYTES;
   }
 
   function walk(folder, basePath) {
@@ -471,20 +473,32 @@ function opSearch_(root, request) {
       var matched = name.toLowerCase().indexOf(query) !== -1;
       var snippet = undefined;
       if (!matched && /\.md$/i.test(name) && contentReads < MAX_SEARCH_CONTENT_READS) {
-        contentReads++;
-        var content = f.getBlob().getDataAsString();
-        var idx = content.toLowerCase().indexOf(query);
-        if (idx !== -1) {
-          matched = true;
-          var start = Math.max(0, idx - 40);
-          snippet = content.substring(start, Math.min(content.length, idx + 80));
+        var fileSize = Math.max(Number(f.getSize()) || 0, 0);
+        if (fileSize > MAX_NOTE_BYTES) {
+          // Zbyt duży plik pomijamy zamiast ładować go w całości do pamięci.
+          truncated = true;
+        } else if (contentBytes + fileSize > MAX_SEARCH_CONTENT_BYTES) {
+          // Ustawienie licznika na limit kończy dalszy skan treści.
+          contentBytes = MAX_SEARCH_CONTENT_BYTES;
+          truncated = true;
+        } else {
+          contentReads++;
+          contentBytes += fileSize;
+          var content = f.getBlob().getDataAsString();
+          var idx = content.toLowerCase().indexOf(query);
+          if (idx !== -1) {
+            matched = true;
+            var start = Math.max(0, idx - 40);
+            snippet = content.substring(start, Math.min(content.length, idx + 80));
+          }
         }
       }
       if (matched) {
         hits.push({ path: path, id: f.getId(), name: name, modifiedTime: f.getLastUpdated().toISOString(), snippet: snippet });
       }
     }
-    if (scanned >= MAX_SEARCH_SCAN || contentReads >= MAX_SEARCH_CONTENT_READS) truncated = true;
+    if (scanned >= MAX_SEARCH_SCAN || contentReads >= MAX_SEARCH_CONTENT_READS ||
+        contentBytes >= MAX_SEARCH_CONTENT_BYTES) truncated = true;
     var folders = folder.getFolders();
     while (folders.hasNext() && !budgetExhausted()) {
       var sub = folders.next();
@@ -501,6 +515,9 @@ function opRead_(root, rootId, request) {
   var resolved = resolveByPath_(root, safe);
   if (!resolved.file) throw new Error('Notatka nie istnieje.');
   assertDescendant_(resolved.file, rootId);
+  if (resolved.file.getSize() > MAX_NOTE_BYTES) {
+    throw new Error('Notatka przekracza limit rozmiaru odczytu.');
+  }
   return {
     path: safe,
     id: resolved.file.getId(),
@@ -533,6 +550,8 @@ if (typeof module !== 'undefined' && module.exports) {
     MAX_TREE_NODES: MAX_TREE_NODES,
     MAX_SEARCH_SCAN: MAX_SEARCH_SCAN,
     MAX_SEARCH_CONTENT_READS: MAX_SEARCH_CONTENT_READS,
+    MAX_NOTE_BYTES: MAX_NOTE_BYTES,
+    MAX_SEARCH_CONTENT_BYTES: MAX_SEARCH_CONTENT_BYTES,
     READ_OPS: READ_OPS,
     META_OPS: META_OPS
   };

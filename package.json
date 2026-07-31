@@ -2,7 +2,7 @@
   "name": "helios-mcp",
   "version": "0.1.0",
   "private": true,
-  "description": "Prywatny zdalny serwer MCP dla osobistej bazy wiedzy Helios (Vercel + Next.js, tylko odczyt w Fazie 1).",
+  "description": "Prywatny zdalny serwer MCP dla osobistej bazy wiedzy Helios (Next.js, tylko odczyt w Fazie 1).",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

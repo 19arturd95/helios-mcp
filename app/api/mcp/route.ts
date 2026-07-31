@@ -9,10 +9,12 @@
 import { createMcpHandler, withMcpAuth } from "mcp-handler";
 import { loadConfig } from "@/lib/config";
 import { verifyMcpBearer, type McpAuthInfo } from "@/lib/auth/verifyToken";
+import { HELIOS_READ_SCOPE } from "@/lib/auth/constants";
 import { makeToolContext, type ToolContext } from "@/lib/tools/handlers";
 import * as H from "@/lib/tools/handlers";
 import * as S from "@/lib/tools/schemas";
 import { enforceRateLimit } from "@/lib/security/rateLimit";
+import { corsHeaders, withCors } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -94,24 +96,42 @@ const baseHandler = createMcpHandler(
 
 // Warstwa uwierzytelnienia: weryfikacja tokenu Bearer + wskazanie
 // Protected Resource Metadata przy 401.
-const authHandler = withMcpAuth(
-  baseHandler,
-  async (_req: Request, bearerToken?: string): Promise<McpAuthInfo | undefined> => {
-    return verifyMcpBearer(bearerToken, loadConfig());
-  },
-  {
-    required: true,
-    resourceMetadataPath: "/.well-known/oauth-protected-resource",
-  },
-);
+type RequestHandler = (req: Request) => Response | Promise<Response>;
+
+// Tworzymy warstwę auth leniwie, żeby `next build` nadal działał bez sekretów.
+// PUBLIC_BASE_URL jest przekazywany jawnie do mcp-handler, więc nagłówek
+// WWW-Authenticate nie może zostać zbudowany z podstawionego Host/X-Forwarded-Host.
+let authHandlerCache: RequestHandler | null = null;
+function authenticatedHandler(): RequestHandler {
+  if (!authHandlerCache) {
+    const config = loadConfig();
+    authHandlerCache = withMcpAuth(
+      baseHandler,
+      async (_req: Request, bearerToken?: string): Promise<McpAuthInfo | undefined> => {
+        return verifyMcpBearer(bearerToken, config);
+      },
+      {
+        required: true,
+        requiredScopes: [HELIOS_READ_SCOPE],
+        resourceMetadataPath: "/.well-known/oauth-protected-resource",
+        resourceUrl: config.baseUrl,
+      },
+    );
+  }
+  return authHandlerCache;
+}
 
 // Rate limiting best-effort (patrz lib/security/rateLimit.ts) PRZED
 // weryfikacją tokenu — ogranicza też próby zgadywania/nadużywania bearer
 // tokenów, nie tylko ruch już uwierzytelniony.
 async function rateLimitedHandler(req: Request): Promise<Response> {
   const limited = await enforceRateLimit(req, { name: "api_mcp", limit: 60, windowSeconds: 60 });
-  if (limited) return limited;
-  return authHandler(req);
+  if (limited) return withCors(limited, HELIOS_READ_SCOPE);
+  return withCors(await authenticatedHandler()(req), HELIOS_READ_SCOPE);
 }
 
 export { rateLimitedHandler as GET, rateLimitedHandler as POST, rateLimitedHandler as DELETE };
+
+export function OPTIONS() {
+  return new Response(null, { status: 204, headers: corsHeaders() });
+}

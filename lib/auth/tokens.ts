@@ -36,11 +36,19 @@ function base64UrlFromBytes(bytes: Uint8Array): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+const PKCE_VERIFIER = /^[A-Za-z0-9._~-]{43,128}$/;
+const PKCE_S256_CHALLENGE = /^[A-Za-z0-9_-]{43}$/;
+
 /** Weryfikacja PKCE S256: base64url(SHA-256(verifier)) === challenge. */
 export async function verifyPkceS256(codeVerifier: string, codeChallenge: string): Promise<boolean> {
-  if (!codeVerifier || !codeChallenge) return false;
+  if (!PKCE_VERIFIER.test(codeVerifier) || !PKCE_S256_CHALLENGE.test(codeChallenge)) return false;
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(codeVerifier));
   return base64UrlFromBytes(new Uint8Array(digest)) === codeChallenge;
+}
+
+/** Sprawdza format wyzwania PKCE S256 przed rozpoczęciem logowania. */
+export function isValidPkceS256Challenge(codeChallenge: string): boolean {
+  return PKCE_S256_CHALLENGE.test(codeChallenge);
 }
 
 // ---------------------------------------------------------------------------

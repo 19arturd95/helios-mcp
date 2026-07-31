@@ -91,6 +91,7 @@ export async function POST(req: Request) {
     redirectBase.searchParams.set("error", "access_denied");
     redirectBase.searchParams.set("error_description", "Użytkownik odrzucił żądanie dostępu.");
     if (claims.state) redirectBase.searchParams.set("state", claims.state);
+    redirectBase.searchParams.set("iss", cfg.baseUrl);
     return new Response(null, {
       status: 302,
       headers: { location: redirectBase.toString(), "set-cookie": clearCsrf, "cache-control": "no-store" },

@@ -8,13 +8,14 @@
  */
 
 import { mcpResourceUrl } from "../config";
+import { HELIOS_READ_SCOPE } from "./constants";
 
 export function protectedResourceMetadata(baseUrl: string) {
   const base = baseUrl.replace(/\/+$/, "");
   return {
     resource: mcpResourceUrl(base),
     authorization_servers: [base],
-    scopes_supported: ["helios.read"],
+    scopes_supported: [HELIOS_READ_SCOPE],
     bearer_methods_supported: ["header"],
     resource_documentation: `${base}/`,
   };
@@ -27,10 +28,11 @@ export function authorizationServerMetadata(baseUrl: string) {
     authorization_endpoint: `${base}/oauth/authorize`,
     token_endpoint: `${base}/oauth/token`,
     registration_endpoint: `${base}/oauth/register`,
-    scopes_supported: ["helios.read"],
+    scopes_supported: [HELIOS_READ_SCOPE],
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code"],
     code_challenge_methods_supported: ["S256"],
     token_endpoint_auth_methods_supported: ["none"],
+    authorization_response_iss_parameter_supported: true,
   };
 }

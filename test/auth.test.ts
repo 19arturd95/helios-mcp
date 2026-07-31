@@ -66,10 +66,23 @@ test("token podpisany innym sekretem → odmowa", async () => {
   assert.equal(await verifyMcpBearer(forged, cfg), undefined);
 });
 
+test("token bez scope helios.read jest odrzucany", async () => {
+  const wrongScope = await issueAccessToken({
+    authSecret: cfg.authSecret,
+    issuer: cfg.baseUrl,
+    audience,
+    email: cfg.allowedEmail,
+    clientId: "c",
+    scope: "helios.write",
+  });
+  assert.equal(await verifyMcpBearer(wrongScope, cfg), undefined);
+});
+
 test("PKCE S256 działa poprawnie", async () => {
   // verifier → challenge = base64url(sha256(verifier))
   const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
   const challenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
   assert.equal(await verifyPkceS256(verifier, challenge), true);
   assert.equal(await verifyPkceS256(verifier, "zle-wyzwanie"), false);
+  assert.equal(await verifyPkceS256("za-krotki", challenge), false);
 });

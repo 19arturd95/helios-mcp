@@ -10,6 +10,7 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 import { loadConfig } from "@/lib/config";
 import { issueAuthorizationCode, verifyOAuthState } from "@/lib/auth/tokens";
 import { evaluateGoogleIdentity } from "@/lib/auth/googleIdentity";
+import { enforceRateLimit } from "@/lib/security/rateLimit";
 import { htmlError } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
@@ -18,6 +19,9 @@ const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_JWKS = createRemoteJWKSet(new URL("https://www.googleapis.com/oauth2/v3/certs"));
 
 export async function GET(req: Request) {
+  const limited = await enforceRateLimit(req, { name: "oauth_callback", limit: 20, windowSeconds: 300 });
+  if (limited) return limited;
+
   const cfg = loadConfig();
   const url = new URL(req.url);
   const code = url.searchParams.get("code");
@@ -52,6 +56,7 @@ export async function GET(req: Request) {
         redirect_uri: `${cfg.baseUrl}/oauth/callback`,
         grant_type: "authorization_code",
       }),
+      signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) return htmlError("Błąd logowania", "Nie udało się wymienić kodu Google.");
     const tok = (await res.json()) as { id_token?: string };
@@ -100,6 +105,8 @@ export async function GET(req: Request) {
   const redirect = new URL(st.redirectUri);
   redirect.searchParams.set("code", authCode);
   if (st.state) redirect.searchParams.set("state", st.state);
+  // RFC 9207. Jawna identyfikacja wystawcy ogranicza ryzyko OAuth mix-up.
+  redirect.searchParams.set("iss", cfg.baseUrl);
   // Kod autoryzacyjny trafia do query string przekierowania — no-store
   // zapobiega jego zapisaniu przez pośredniczące cache'e/proxy.
   return new Response(null, {

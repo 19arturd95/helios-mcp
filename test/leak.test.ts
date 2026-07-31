@@ -38,6 +38,20 @@ test("zbyt krótki sekret → błąd nie ujawnia jego wartości", () => {
   }
 });
 
+test("produkcyjny PUBLIC_BASE_URL bez HTTPS jest odrzucany", () => {
+  assert.throws(
+    () => loadConfig({ ...FULL_ENV, PUBLIC_BASE_URL: "http://helios.example.com", NODE_ENV: "production" }),
+    /HTTPS/,
+  );
+});
+
+test("APPS_SCRIPT_URL spoza oficjalnego hosta wdrożeń jest odrzucany", () => {
+  assert.throws(
+    () => loadConfig({ ...FULL_ENV, APPS_SCRIPT_URL: "https://evil.example.com/macros/s/AK/exec" }),
+    /APPS_SCRIPT_URL/,
+  );
+});
+
 test("błąd sieci klienta adaptera nie ujawnia sekretu", async () => {
   const secret = "super-tajny-sekret-do-nie-wycieku-123";
   const throwingFetch = (async () => {

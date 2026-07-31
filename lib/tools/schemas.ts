@@ -5,29 +5,31 @@ import { z } from "zod";
 export const statusSchema = {} as const;
 
 export const getContextSchema = {
-  rawText: z.string().min(1).describe("Surowa treść do zapamiętania (fragment rozmowy)."),
+  rawText: z.string().min(1).max(20_000).describe("Surowa treść do zapamiętania (fragment rozmowy)."),
   conversationSummary: z
     .string()
+    .max(5_000)
     .optional()
     .describe("Krótkie podsumowanie rozmowy przygotowane przez model."),
-  date: z.string().optional().describe("Data w formacie ISO (opcjonalnie)."),
+  date: z.string().max(64).optional().describe("Data w formacie ISO (opcjonalnie)."),
   hints: z
-    .array(z.string())
+    .array(z.string().min(1).max(200))
+    .max(20)
     .optional()
     .describe("Wskazówki użytkownika: tematy, tagi, sugerowane strony."),
 } as const;
 
 export const searchSchema = {
-  query: z.string().min(1).describe("Fraza wyszukiwania."),
+  query: z.string().min(1).max(500).describe("Fraza wyszukiwania."),
   limit: z.number().int().min(1).max(50).optional().describe("Maksymalna liczba wyników."),
 } as const;
 
 export const readNoteSchema = {
-  path: z.string().min(1).describe("Ścieżka względna notatki, np. '20 Wiki/temat.md'."),
+  path: z.string().min(1).max(1024).describe("Ścieżka względna notatki, np. '20 Wiki/temat.md'."),
 } as const;
 
 export const listTreeSchema = {
-  path: z.string().optional().describe("Podfolder do wylistowania (opcjonalnie)."),
+  path: z.string().max(1024).optional().describe("Podfolder do wylistowania (opcjonalnie)."),
   maxDepth: z.number().int().min(1).max(8).optional().describe("Maksymalna głębokość drzewa."),
 } as const;
 

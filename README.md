@@ -6,7 +6,7 @@ narzędzi ani operacji zapisu notatek. Notatki **pozostają wyłącznie na Googl
 Drive**. Serwer nie przechowuje ich treści ani kopii.
 
 ```
-ChatGPT / Claude  →  Helios MCP (Vercel)  →  Helios Drive Adapter (Apps Script)  →  Google Drive
+ChatGPT / Claude  →  Helios MCP (Next.js, jeszcze niewdrożony)  →  Helios Drive Adapter (Apps Script)  →  Google Drive
 ```
 
 - **Faza 1 (ten PR): tylko odczyt.** 7 narzędzi do czytania i przeszukiwania.
@@ -15,13 +15,15 @@ ChatGPT / Claude  →  Helios MCP (Vercel)  →  Helios Drive Adapter (Apps Scri
 ## Stan weryfikacji Fazy 1
 
 - produkcyjny build Next.js przechodzi bez sekretów i zmiennych środowiskowych,
-- testy lokalne: 100/100, bez pominiętych testów,
+- testy lokalne: 115/115, bez pominiętych testów,
 - oba typechecki przechodzą,
 - CI dla pull requestów wykonuje `npm ci`, testy, oba typechecki i build,
-- `npm audit --omit=dev`: 5 podatności, 2 umiarkowane i 3 wysokie. Ocena
-  osiągalności znajduje się w sekcji „Pozostałe ryzyka zależności”,
+- `npm audit --omit=dev`: 5 wpisów pakietów wynikających z 2 źródłowych
+  advisory. Agregacja poziomów zależy od wersji npm; szczegóły znajdują się
+  w sekcji „Pozostałe ryzyka zależności”,
 - nie wykonano wdrożenia ani pełnych testów E2E OAuth z Google, Claude lub
-  ChatGPT. To osobny etap po decyzji o Vercel Preview.
+  ChatGPT. Nie istnieje jeszcze projekt hostingowy ani projekt Vercel. Wybór
+  hostingu i ewentualny Preview są osobnym, przyszłym etapem.
 
 > Ten dokument jest napisany dla osoby nietechnicznej. Wykonuj kroki po kolei.
 > Wszędzie, gdzie widzisz `TWOJE-...`, wstaw własną wartość.
@@ -32,7 +34,7 @@ ChatGPT / Claude  →  Helios MCP (Vercel)  →  Helios Drive Adapter (Apps Scri
 
 | Usługa | Do czego | Koszt | Karta? |
 |---|---|---|---|
-| Vercel (plan **Hobby**) | hosting kodu serwera | 0 zł | nie |
+| Vercel (plan **Hobby**, jeśli zostanie wybrany) | możliwy hosting kodu serwera | 0 zł | nie |
 | Google Cloud — OAuth Client | logowanie przez Google | 0 zł | nie |
 | Google Apps Script | dostęp do Drive | 0 zł | nie |
 | Google Drive | Twoje notatki | w ramach konta | nie |
@@ -88,7 +90,12 @@ https://TWOJ-PROJEKT.vercel.app/oauth/callback
 
 > Ważne: adres musi kończyć się dokładnie na `/oauth/callback`.
 
-## Krok 3 — Zmienne środowiskowe Vercela
+## Opcjonalny przyszły etap — wdrożenie na Vercelu
+
+> Ten etap nie został rozpoczęty. Helios nie ma obecnie projektu na Vercelu.
+> Instrukcja pozostaje wariantem do użycia dopiero po osobnej decyzji o hostingu.
+
+### Krok 3 — Zmienne środowiskowe Vercela
 
 W Vercelu: **Project → Settings → Environment Variables**. Dodaj poniższe do
 **Preview** i **Production**. Wzór (bez sekretów) jest w pliku `.env.example`.
@@ -111,20 +118,20 @@ obroną jest i tak obowiązkowy **ekran zgody** (patrz Krok 8 poniżej). Po
 poznaniu realnego redirect_uri możesz go dopisać do tej listy, żeby zawęzić
 akceptowane rejestracje DCR — patrz `.env.example` po szczegóły formatu.
 
-## Krok 4 — Import repozytorium GitHub
+### Krok 4 — Import repozytorium GitHub
 
 1. Wejdź na <https://vercel.com/new> i zaloguj się przez GitHub.
 2. Wybierz repozytorium `helios-mcp` i kliknij **Import**.
 3. Framework wykryje się automatycznie jako **Next.js**. Nic nie zmieniaj.
 4. Upewnij się, że zmienne z Kroku 3 są dodane, i kliknij **Deploy**.
 
-## Krok 5 — Preview deployment
+### Krok 5 — Preview deployment
 
 Każda gałąź inna niż główna tworzy wdrożenie **Preview**. Po pierwszym
 imporcie Vercel poda adres. Zaktualizuj `PUBLIC_BASE_URL` i **Redirect URI**
 (Krok 2) o realny adres, jeśli się różni, i wdróż ponownie.
 
-## Krok 6 — Test odczytu
+### Krok 6 — Test odczytu
 
 Sprawdź, że publiczne metadane odpowiadają (w przeglądarce lub `curl`):
 
@@ -136,13 +143,13 @@ https://TWOJ-PROJEKT.vercel.app/.well-known/oauth-authorization-server
 Powinny zwrócić JSON. Endpoint `/api/mcp` bez logowania musi zwracać **401**
 (to poprawne — wymaga tokenu). To potwierdza, że serwer nie jest publiczny.
 
-## Krok 7 — Production deployment
+### Krok 7 — Production deployment
 
 Gdy Preview działa: w Vercelu ustaw gałąź główną jako produkcyjną (domyślnie
 `main`) — scalenie do niej tworzy wdrożenie **Production**. Uzupełnij Redirect
 URI o adres produkcyjny.
 
-## Krok 8 — Test w Claude
+### Krok 8 — Test w Claude
 
 1. W Claude: **Settings → Connectors → Add custom connector** (lub „Add MCP
    server").
@@ -157,7 +164,7 @@ URI o adres produkcyjny.
 7. Kliknij **Odrzuć** na ekranie zgody przy kolejnej próbie i sprawdź, że
    logowanie kończy się bez dostępu (bez przekierowania do Google).
 
-## Krok 9 — Test w ChatGPT
+### Krok 9 — Test w ChatGPT
 
 1. W ChatGPT (tryb z obsługą konektorów MCP): dodaj serwer o adresie
    `https://TWOJ-PROJEKT.vercel.app/api/mcp`.
@@ -167,21 +174,21 @@ URI o adres produkcyjny.
 > **Warunek rozpoczęcia Fazy 2:** logowanie i odczyt muszą działać w **Claude
 > ORAZ ChatGPT**. Dopiero wtedy projektujemy zapis w osobnym PR.
 
-## Krok 10 — Faza 2
+### Krok 10 — Faza 2
 
 Faza 2 wymaga osobnego projektu zmian i osobnego pull requesta. Musi ponownie
 wprowadzić operacje zapisu wraz z backupem, kontrolą `expectedModifiedTime`,
 idempotencją oraz osobnymi testami bezpieczeństwa. Nie da się jej włączyć
 zmienną środowiskową lub właściwością Apps Script w kodzie Fazy 1.
 
-## Krok 11 — Rollback (cofnięcie zmian)
+### Krok 11 — Rollback (cofnięcie zmian)
 
 - **Kod / wdrożenie:** w Vercelu otwórz **Deployments**, znajdź poprzednie
   działające wdrożenie i kliknij **Promote to Production** (albo **Rollback**).
 - **Notatki:** Faza 1 ich nie modyfikuje, więc nie tworzy kopii zapasowych i
   nie wymaga rollbacku danych.
 
-## Krok 12 — Rotacja sekretów
+### Krok 12 — Rotacja sekretów
 
 Rób to okresowo lub przy podejrzeniu wycieku:
 
@@ -210,12 +217,16 @@ npm run dev           # uruchomienie lokalne (wymaga .env.local)
 
 Po aktualizacji do `next@15.5.22`, `fast-uri@3.1.5`,
 `@hono/node-server@1.19.17` i bezpiecznego `postcss@8.5.25`, wynik
-`npm audit --omit=dev` zawiera 5 pozycji: 2 umiarkowane i 3 wysokie.
+`npm audit --omit=dev` zawiera te same 5 wpisów pakietów. npm 10.9.4
+(wersja odpowiadająca CI na Node 20) agreguje je jako 2 umiarkowane i 3
+wysokie, a npm 11.9.0 jako 3 umiarkowane i 2 wysokie. Różnica dotyczy
+wyłącznie agregującego wpisu `mcp-handler`, nie zestawu advisory ani kodu.
 
 - `@hono/node-server` i wynikowy wpis `@modelcontextprotocol/sdk`, 2
   umiarkowane pozycje, dotyczą tego samego traversalu w `serve-static` na
-  Windows. Helios jest budowany dla Vercel Linux i nie używa API
-  `serve-static`; pakiet nie występuje w trace żadnej trasy aplikacji. To
+  Windows. CI i lokalny build kontrolny działają na Linuxie, a Helios nie
+  używa API `serve-static`; pakiet nie występuje w trace żadnej trasy
+  aplikacji. To
   istotnie ogranicza osiągalność, ale nie jest gwarancją braku ryzyka.
   Poprawka wskazana przez npm wymaga migracji z `mcp-handler@1.1.0` do 2.x,
   czyli zmiany major i nowego pakietu serwera MCP. Nie została wykonana bez
@@ -235,6 +246,10 @@ Szczegóły architektury i decyzji: [`docs/PLAN.md`](docs/PLAN.md).
 ## Bezpieczeństwo w skrócie
 
 - Dostęp tylko dla `ALLOWED_EMAIL`; inne konta odrzucane.
+- OAuth przyjmuje wyłącznie scope `helios.read`, wymaga kanonicznego parametru
+  `resource` w obu etapach i ponownie sprawdza audience po stronie MCP.
+- PKCE S256 ma walidowany format 43-znakowego challenge oraz verifiera o
+  długości 43–128 znaków. Odpowiedzi autoryzacyjne zawierają `iss` (RFC 9207).
 - **Ekran zgody** na `/oauth/authorize` — zawsze pokazuje nazwę klienta OAuth
   i host redirect_uri, zanim rozpocznie się logowanie Google. Kod
   autoryzacyjny NIGDY nie jest wydawany bez świadomego kliknięcia „Zezwól".
@@ -248,16 +263,22 @@ Szczegóły architektury i decyzji: [`docs/PLAN.md`](docs/PLAN.md).
   (nonce, check-and-set atomowy przez `LockService`) i starym znacznikiem
   czasu (±5 min).
 - Blokada traversalu, ścieżek absolutnych, `%`, `\`, znaków sterujących.
-- Odczyt pojedynczej notatki jest ograniczony do ścieżek względnych `.md`.
+- Odczyt pojedynczej notatki jest ograniczony do ścieżek względnych `.md`
+  i maksymalnie 200 KiB treści.
 - **Limity `listTree`/`search`** chronią przed DoS przez wyliczanie całego
   Drive: maks. 500 węzłów drzewa (`MAX_TREE_NODES`), maks. 800 przejrzanych
   plików (`MAX_SEARCH_SCAN`), maks. 200 odczytów treści pliku
-  (`MAX_SEARCH_CONTENT_READS`) — stałe zdefiniowane w `apps-script/Code.gs`.
+  (`MAX_SEARCH_CONTENT_READS`) oraz łącznie 2 MiB skanowanej treści
+  (`MAX_SEARCH_CONTENT_BYTES`) — stałe zdefiniowane w `apps-script/Code.gs`.
   Obcięty wynik ma `truncated: true`.
+- `/api/mcp` zwraca kompletne CORS także dla preflight, 401 i 403; klient
+  webowy może odczytać `WWW-Authenticate` i wskazany scope `helios.read`.
 - **Rate limiting** (best effort, bez płatnej infrastruktury) na
-  `/oauth/register`, `/oauth/authorize`, `/oauth/token` i `/api/mcp` — zwraca
+  `/oauth/register`, `/oauth/authorize`, `/oauth/callback`, `/oauth/token` i
+  `/api/mcp` — zwraca
   `429` + `Retry-After` po przekroczeniu limitu. Ogranicznik działa w pamięci
-  procesu pojedynczej instancji serverless (Vercel Hobby nie gwarantuje
+  procesu pojedynczej instancji serverless (typowy hosting serverless, w tym
+  ewentualny Vercel Hobby, nie gwarantuje
   współdzielenia stanu między instancjami) — to warstwa odstraszająca, nie
   twarda gwarancja globalnego limitu. Klucz limitu to hash (IP + trasa),
   nigdy jawny e-mail/token; nagłówek `x-forwarded-for` traktowany jako
