@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { makeToolContext, handleReadNote, handleStatus } from "../lib/tools/handlers";
+import { handleGetContext, handleInboxStatus, makeToolContext, handleReadNote, handleStatus } from "../lib/tools/handlers";
+import { DriveAdapterError } from "../lib/drive/client";
 import type { ReadResult, StatusResult } from "../lib/drive/types";
 import { loadAppsScript, makeDeps } from "./helpers/appsScript";
 import { testConfig } from "./helpers/config";
@@ -61,6 +62,7 @@ test("poprawny odczyt: podpisane żądanie jest zaakceptowane i zwraca treść",
   assert.equal(res.path, "20 Wiki/temat.md");
   assert.match(res.content, /Treść notatki/);
   assert.equal(res.modifiedTime, "2026-07-13T09:00:00.000Z");
+  assert.equal("id" in res, false, "publiczny wynik MCP nie powinien ujawniać ID pliku Drive");
 });
 
 test("helios_status przechodzi przez podpisany kanał", async () => {
@@ -70,6 +72,7 @@ test("helios_status przechodzi przez podpisany kanał", async () => {
   assert.equal(res.ok, true);
   assert.equal(res.rootName, "helios");
   assert.equal(res.readOnly, true);
+  assert.equal("rootId" in res, false, "status MCP nie powinien ujawniać ID folderu Drive");
 });
 
 test("odczyt z niedozwoloną ścieżką jest odrzucany zanim wyjdzie w sieć", async () => {
@@ -82,4 +85,32 @@ test("odczyt z niedozwoloną ścieżką jest odrzucany zanim wyjdzie w sieć", a
   const ctx = makeToolContext(cfg, guardFetch);
   await assert.rejects(() => handleReadNote(ctx, { path: "../../secret.md" }));
   assert.equal(called, false, "żądanie nie powinno trafić do adaptera");
+});
+
+test("awaria adaptera nie jest maskowana jako pusty Inbox lub brak plików systemowych", async () => {
+  const cfg = testConfig();
+  const ctx = {
+    config: cfg,
+    call: async () => {
+      throw new DriveAdapterError("Nie udało się połączyć z Helios Drive Adapter.", "network");
+    },
+  };
+  await assert.rejects(() => handleInboxStatus(ctx), /Nie udało się połączyć/);
+  await assert.rejects(
+    () => handleGetContext(ctx, { rawText: "test" }),
+    /Nie udało się połączyć/,
+  );
+});
+
+test("brak folderu Inbox nadal daje bezpieczny pusty wynik", async () => {
+  const cfg = testConfig();
+  const ctx = {
+    config: cfg,
+    call: async () => {
+      throw new DriveAdapterError("Folder nie istnieje.", "error");
+    },
+  };
+  const result = await handleInboxStatus(ctx);
+  assert.equal(result.entryCount, 0);
+  assert.deepEqual(result.entries, []);
 });

@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { authorizationServerMetadata } from "../lib/auth/metadata";
-import { corsHeaders, withCors } from "../lib/http";
+import { corsHeaders, htmlError, htmlSecurityHeaders, withCors } from "../lib/http";
+import { READ_ONLY_TOOL_ANNOTATIONS } from "../lib/tools/annotations";
 
 process.env.ALLOWED_EMAIL = "me@example.com";
 process.env.PUBLIC_BASE_URL = "https://helios.example.com";
@@ -41,4 +42,39 @@ test("warstwa MCP dodaje do 401 CORS i wymagany scope", () => {
 test("metadane OAuth deklarują identyfikację wystawcy odpowiedzi", () => {
   const metadata = authorizationServerMetadata("https://helios.example.com");
   assert.equal(metadata.authorization_response_iss_parameter_supported, true);
+});
+
+test("wszystkie narzędzia deklarują zamknięty tryb tylko do odczytu", () => {
+  assert.deepEqual(READ_ONLY_TOOL_ANNOTATIONS, {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  });
+});
+
+test("CSP dopuszcza tylko HTTPS i lokalny HTTP jako cele formularza", () => {
+  const csp = new Headers(
+    htmlSecurityHeaders([
+      "https://trusted.example/callback",
+      "http://localhost:3000/callback",
+      "http://127.0.0.1:4000/callback",
+      "http://remote.example/callback",
+      "javascript:alert(1)",
+    ]),
+  ).get("content-security-policy") ?? "";
+  assert.match(csp, /https:\/\/trusted\.example/);
+  assert.match(csp, /http:\/\/localhost:3000/);
+  assert.match(csp, /http:\/\/127\.0\.0\.1:4000/);
+  assert.doesNotMatch(csp, /remote\.example/);
+  assert.doesNotMatch(csp, /javascript/);
+});
+
+test("strony błędów OAuth mają pełne nagłówki bezpieczeństwa", () => {
+  const res = htmlError("Błąd", "Test");
+  assert.equal(res.headers.get("x-frame-options"), "DENY");
+  assert.equal(res.headers.get("x-content-type-options"), "nosniff");
+  assert.match(res.headers.get("content-security-policy") ?? "", /default-src 'none'/);
+  assert.match(res.headers.get("permissions-policy") ?? "", /camera=\(\)/);
+  assert.match(res.headers.get("strict-transport-security") ?? "", /max-age=31536000/);
 });

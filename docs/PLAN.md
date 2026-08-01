@@ -48,7 +48,10 @@ Przepływ:
    przed CSRF przez wymagany double-submit cookie i dodatkową walidację
    `Origin` / `Sec-Fetch-Site`; `Origin: null` z izolowanego popupu jest
    akceptowany tylko przy `Sec-Fetch-Site: same-origin`, stan zgody to
-   podpisany, krótkożyciowy JWT — `AUD_CONSENT`, TTL 5 min). Dopiero **teraz** następuje
+   podpisany, krótkożyciowy JWT — `AUD_CONSENT`, TTL 5 min). Brak sygnałów
+   przeglądarki, duplikat ciasteczka albo nieznana decyzja są odrzucane.
+   CSP dopuszcza wyłącznie zweryfikowane originy HTTPS, a odpowiedź po POST
+   używa `303 See Other`. Dopiero **teraz** następuje
    przekierowanie do logowania Google; oryginalne parametry klienta przenosi podpisany
    `state` (`AUD_STATE`). „Odrzuć" (lub nieprawidłowa/wygasła zgoda) kończy
    proces przekierowaniem do klienta z `error=access_denied`, bez logowania
@@ -136,7 +139,7 @@ test/                     # testy bezpieczeństwa (node:test + tsx), w tym testy
 
 | Usługa | Rola | Koszt | Karta |
 |---|---|---|---|
-| Vercel Hobby (opcjonalnie) | możliwy hosting `/api/*` | 0 zł | nie |
+| Vercel Hobby | produkcyjny hosting `/api/*` | 0 zł | nie |
 | Google Cloud OAuth Client | logowanie | 0 zł | nie |
 | Google Apps Script | adapter Drive | 0 zł (limity dzienne) | nie |
 | Google Drive | notatki | konto | nie |
@@ -173,7 +176,10 @@ autoryzacyjnego (replay odrzucony przez `consumeAuthCode`), wygasły kod,
 notatki, CORS MCP dla preflight/401/403, scope `helios.read`, brak operacji i
 eksportów zapisu w Code.gs niezależnie
 od właściwości skryptu, nieznana operacja Apps Script, `assertDescendant_`
-dla pliku spoza `ROOT_FOLDER_ID`, rate limiting (`429` + `Retry-After`).
+dla pliku spoza `ROOT_FOLDER_ID`, rate limiting (`429` + `Retry-After`),
+adnotacje tylko do odczytu i schematy wyjścia w rzeczywistym `tools/list`,
+`structuredContent` oraz usuwanie identyfikatorów Google Drive z publicznych
+wyników MCP.
 
 Zasada kluczowa: testy weryfikują **realne** funkcje `apps-script/Code.gs`
 (ładowane do Node przez `vm`, z w pełni podstawionym fałszywym
@@ -186,41 +192,24 @@ nie jest testowana na poziomie HTTP (jose na Node pobiera JWKS przez
 sensownie zamockować) — logika PO weryfikacji podpisu jest wydzielona do
 `lib/auth/googleIdentity.ts` i tam w pełni testowana.
 
-Aktualny wynik: 117 testów, 117 zaliczonych, 0 pominiętych. Oba typechecki i
-produkcyjny build Next.js przechodzą. Build nie wymaga sekretów. Pełny E2E
-OAuth z prawdziwym Google JWKS oraz klientami Claude i ChatGPT nie został
-wykonany, ponieważ nie ma jeszcze wybranego ani skonfigurowanego hostingu.
+Aktualny wynik: 129 testów, 129 zaliczonych, 0 pominiętych. Oba typechecki,
+produkcyjny build Next.js i `npm audit --omit=dev` przechodzą. Build nie
+wymaga sekretów. Produkcyjny OAuth z Google oraz odczyt przez ChatGPT zostały
+potwierdzone E2E. Pełny test E2E z Claude pozostaje do wykonania.
 
 ## 7. Zależności i audyt
 
-Kontrolowane aktualizacje w Fazie 1:
+Kontrolowane aktualizacje i piny:
 
-- `next` 15.5.20 → 15.5.22,
-- `fast-uri` 3.1.3 → 3.1.5,
-- `@hono/node-server` 1.19.14 → 1.19.17,
-- `postcss` 8.4.31 → 8.5.25 przez override zgodny z major wersją.
+- `mcp-handler` 1.1.0 → 2.1.0,
+- stare `@modelcontextprotocol/sdk` 1.x → `@modelcontextprotocol/server` 2.0.0,
+- `zod` 3.x → 4.2.0,
+- `sharp` → 0.35.3 przez override,
+- `next` 15.5.22, `fast-uri` 3.1.5 i `postcss` 8.5.25 pozostają przypięte.
 
-Usunęły one podatności bezpośrednie Next.js, `fast-uri` i PostCSS. Aktualny
-`npm audit --omit=dev` raportuje te same 5 wpisów pakietów. npm 10.9.4
-(CI/Node 20) grupuje je jako 2 umiarkowane i 3 wysokie, a npm 11.9.0 jako 3
-umiarkowane i 2 wysokie. Zmienia się wyłącznie agregacja wpisu `mcp-handler`;
-źródłem pozostają te same 2 advisory opisane poniżej.
-
-1. `@hono/node-server` i wynikowy wpis `@modelcontextprotocol/sdk` to 2
-   umiarkowane pozycje opisujące jeden traversal w `serve-static` na Windows.
-   CI i lokalny build kontrolny działają na Linuxie, Helios nie wywołuje
-   `serve-static`, a pakiet nie trafia do trace tras builda. Osiągalność jest
-   więc niska, lecz nie zerowa z gwarancją. Hosting na Windows wymagałby
-   ponownej oceny. Poprawka wymaga migracji `mcp-handler` 1.x → 2.x i osobnej
-   walidacji kompatybilności.
-2. `sharp`, wynikowy wpis `next` oraz agregujący ich zależności wpis
-   `mcp-handler` to 3 wysokie pozycje obejmujące libvips. `mcp-handler` nie
-   opisuje trzeciej niezależnej podatności źródłowej; jest klasyfikowany jako
-   wysoki, bo zależy jednocześnie od `next` i podatnego łańcucha SDK. Helios
-   nie ma obrazów ani `next/image`, lecz `sharp` jest obecny w ogólnym trace
-   serwera Next.js. Poprawiona linia `sharp@0.35.x` leży poza zakresem
-   wspieranym przez `next@15.5.22` (`^0.34.3`). Nie wymuszono nieobsługiwanej
-   wersji.
-
-Nie użyto `npm audit fix --force`. Pozostałe ryzyka muszą zostać ponownie
-ocenione przed Production lub przy migracji głównych zależności.
+Migracja MCP usunęła nieużywany łańcuch SDK/Hono i związane z nim advisory.
+Poprawiony `sharp` usuwa podatny wariant libvips instalowany opcjonalnie przez
+Next.js. Helios nie korzysta z `next/image`, ale zgodność override została
+sprawdzona pełnym buildem produkcyjnym i testami protokołu MCP. Aktualny wynik
+`npm audit --omit=dev`: 0 znanych podatności. Nie użyto
+`npm audit fix --force`.

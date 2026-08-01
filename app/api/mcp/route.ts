@@ -10,6 +10,7 @@ import { createMcpHandler, withMcpAuth } from "mcp-handler";
 import { loadConfig } from "@/lib/config";
 import { verifyMcpBearer, type McpAuthInfo } from "@/lib/auth/verifyToken";
 import { HELIOS_READ_SCOPE } from "@/lib/auth/constants";
+import { READ_ONLY_TOOL_ANNOTATIONS } from "@/lib/tools/annotations";
 import { makeToolContext, type ToolContext } from "@/lib/tools/handlers";
 import * as H from "@/lib/tools/handlers";
 import * as S from "@/lib/tools/schemas";
@@ -27,70 +28,104 @@ function ctx(): ToolContext {
   return ctxCache;
 }
 
-function asText(value: unknown) {
-  return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
+function asToolResult<T extends object>(value: T) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }],
+    structuredContent: value as Record<string, unknown>,
+  };
 }
 
 const baseHandler = createMcpHandler(
   (server) => {
-    server.tool(
+    server.registerTool(
       "helios_status",
-      "Sprawdza połączenie z Helios Drive Adapter i zwraca podstawowy status (tryb tylko-odczyt).",
-      S.statusSchema,
-      async () => asText(await H.handleStatus(ctx())),
+      {
+        title: "Status Heliosa",
+        description: "Sprawdza połączenie z Helios Drive Adapter i zwraca podstawowy status (tryb tylko-odczyt).",
+        inputSchema: S.statusSchema,
+        outputSchema: S.statusOutputSchema,
+        annotations: READ_ONLY_TOOL_ANNOTATIONS,
+      },
+      async () => asToolResult(await H.handleStatus(ctx())),
     );
 
-    server.tool(
+    server.registerTool(
       "helios_get_context",
-      "Zbiera kontekst zapisu: czyta AGENTS.md, SCHEMA.md, index.md i wyszukuje powiązane strony. Nic nie zapisuje.",
-      S.getContextSchema,
-      async (args) => asText(await H.handleGetContext(ctx(), args)),
+      {
+        title: "Kontekst Heliosa",
+        description: "Zbiera kontekst zapisu: czyta AGENTS.md, SCHEMA.md, index.md i wyszukuje powiązane strony. Nic nie zapisuje.",
+        inputSchema: S.getContextSchema,
+        outputSchema: S.getContextOutputSchema,
+        annotations: READ_ONLY_TOOL_ANNOTATIONS,
+      },
+      async (args) => asToolResult(await H.handleGetContext(ctx(), args)),
     );
 
-    server.tool(
+    server.registerTool(
       "helios_search",
-      "Wyszukuje notatki w bazie Helios po frazie.",
-      S.searchSchema,
-      async (args) => asText(await H.handleSearch(ctx(), args)),
+      {
+        title: "Wyszukaj w Heliosie",
+        description: "Wyszukuje notatki w bazie Helios po frazie.",
+        inputSchema: S.searchSchema,
+        outputSchema: S.searchOutputSchema,
+        annotations: READ_ONLY_TOOL_ANNOTATIONS,
+      },
+      async (args) => asToolResult(await H.handleSearch(ctx(), args)),
     );
 
-    server.tool(
+    server.registerTool(
       "helios_read_note",
-      "Czyta pojedynczą notatkę (Markdown) wraz z jej modifiedTime.",
-      S.readNoteSchema,
-      async (args) => asText(await H.handleReadNote(ctx(), args)),
+      {
+        title: "Odczytaj notatkę Heliosa",
+        description: "Czyta pojedynczą notatkę (Markdown) wraz z jej modifiedTime.",
+        inputSchema: S.readNoteSchema,
+        outputSchema: S.readNoteOutputSchema,
+        annotations: READ_ONLY_TOOL_ANNOTATIONS,
+      },
+      async (args) => asToolResult(await H.handleReadNote(ctx(), args)),
     );
 
-    server.tool(
+    server.registerTool(
       "helios_list_tree",
-      "Zwraca drzewo folderów i plików bazy Helios (do wskazanej głębokości).",
-      S.listTreeSchema,
-      async (args) => asText(await H.handleListTree(ctx(), args)),
+      {
+        title: "Drzewo Heliosa",
+        description: "Zwraca drzewo folderów i plików bazy Helios (do wskazanej głębokości).",
+        inputSchema: S.listTreeSchema,
+        outputSchema: S.listTreeOutputSchema,
+        annotations: READ_ONLY_TOOL_ANNOTATIONS,
+      },
+      async (args) => asToolResult(await H.handleListTree(ctx(), args)),
     );
 
-    server.tool(
+    server.registerTool(
       "helios_inbox_status",
-      "Zwraca liczbę i listę wpisów w Inboxie.",
-      S.inboxStatusSchema,
-      async () => asText(await H.handleInboxStatus(ctx())),
+      {
+        title: "Status Inboxa Heliosa",
+        description: "Zwraca liczbę i listę wpisów w Inboxie.",
+        inputSchema: S.inboxStatusSchema,
+        outputSchema: S.inboxStatusOutputSchema,
+        annotations: READ_ONLY_TOOL_ANNOTATIONS,
+      },
+      async () => asToolResult(await H.handleInboxStatus(ctx())),
     );
 
-    server.tool(
+    server.registerTool(
       "helios_review_inbox",
-      "Przygotowuje dane do przeglądu Inboxa: czyta wpisy i pobiera powiązany kontekst. Nic nie zmienia.",
-      S.reviewInboxSchema,
-      async (args) => asText(await H.handleReviewInbox(ctx(), args)),
+      {
+        title: "Przejrzyj Inbox Heliosa",
+        description: "Przygotowuje dane do przeglądu Inboxa: czyta wpisy i pobiera powiązany kontekst. Nic nie zmienia.",
+        inputSchema: S.reviewInboxSchema,
+        outputSchema: S.reviewInboxOutputSchema,
+        annotations: READ_ONLY_TOOL_ANNOTATIONS,
+      },
+      async (args) => asToolResult(await H.handleReviewInbox(ctx(), args)),
     );
   },
   {
-    // Zdolności serwera (tylko narzędzia).
+    serverInfo: { name: "helios-mcp", version: "0.1.0" },
+    // Zdolności serwera (tylko narzędzia), transport stateless.
     capabilities: {},
-  },
-  {
-    // Transport Streamable HTTP na /api/mcp. Bez Redisa (brak SSE).
-    basePath: "/api",
     verboseLogs: false,
-    disableSse: true,
   },
 );
 

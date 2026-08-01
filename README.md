@@ -6,24 +6,22 @@ narzędzi ani operacji zapisu notatek. Notatki **pozostają wyłącznie na Googl
 Drive**. Serwer nie przechowuje ich treści ani kopii.
 
 ```
-ChatGPT / Claude  →  Helios MCP (Next.js, jeszcze niewdrożony)  →  Helios Drive Adapter (Apps Script)  →  Google Drive
+ChatGPT / Claude  →  Helios MCP (Vercel / Next.js)  →  Helios Drive Adapter (Apps Script)  →  Google Drive
 ```
 
-- **Faza 1 (ten PR): tylko odczyt.** 7 narzędzi do czytania i przeszukiwania.
+- **Faza 1 (aktualna produkcja): tylko odczyt.** 7 narzędzi do czytania i przeszukiwania.
 - **Faza 2 (osobny, przyszły PR): zapis.** Kod zapisu nie istnieje w Fazie 1.
 
 ## Stan weryfikacji Fazy 1
 
 - produkcyjny build Next.js przechodzi bez sekretów i zmiennych środowiskowych,
-- testy lokalne: 117/117, bez pominiętych testów,
+- testy lokalne: 129/129, bez pominiętych testów,
 - oba typechecki przechodzą,
 - CI dla pull requestów wykonuje `npm ci`, testy, oba typechecki i build,
-- `npm audit --omit=dev`: 5 wpisów pakietów wynikających z 2 źródłowych
-  advisory. Agregacja poziomów zależy od wersji npm; szczegóły znajdują się
-  w sekcji „Pozostałe ryzyka zależności”,
-- nie wykonano wdrożenia ani pełnych testów E2E OAuth z Google, Claude lub
-  ChatGPT. Nie istnieje jeszcze projekt hostingowy ani projekt Vercel. Wybór
-  hostingu i ewentualny Preview są osobnym, przyszłym etapem.
+- `npm audit --omit=dev`: 0 znanych podatności,
+- produkcja działa pod `https://helios-mcp.vercel.app/api/mcp`,
+- OAuth z Google i rzeczywisty odczyt przez ChatGPT zostały potwierdzone E2E;
+  pełny test E2E z Claude pozostaje do wykonania.
 
 > Ten dokument jest napisany dla osoby nietechnicznej. Wykonuj kroki po kolei.
 > Wszędzie, gdzie widzisz `TWOJE-...`, wstaw własną wartość.
@@ -34,7 +32,7 @@ ChatGPT / Claude  →  Helios MCP (Next.js, jeszcze niewdrożony)  →  Helios D
 
 | Usługa | Do czego | Koszt | Karta? |
 |---|---|---|---|
-| Vercel (plan **Hobby**, jeśli zostanie wybrany) | możliwy hosting kodu serwera | 0 zł | nie |
+| Vercel (plan **Hobby**) | hosting kodu serwera | 0 zł | nie |
 | Google Cloud — OAuth Client | logowanie przez Google | 0 zł | nie |
 | Google Apps Script | dostęp do Drive | 0 zł | nie |
 | Google Drive | Twoje notatki | w ramach konta | nie |
@@ -90,10 +88,10 @@ https://TWOJ-PROJEKT.vercel.app/oauth/callback
 
 > Ważne: adres musi kończyć się dokładnie na `/oauth/callback`.
 
-## Opcjonalny przyszły etap — wdrożenie na Vercelu
+## Wdrożenie na Vercelu
 
-> Ten etap nie został rozpoczęty. Helios nie ma obecnie projektu na Vercelu.
-> Instrukcja pozostaje wariantem do użycia dopiero po osobnej decyzji o hostingu.
+> Produkcyjny projekt już istnieje. Poniższe kroki służą odtworzeniu konfiguracji
+> lub uruchomieniu osobnego środowiska bez zapisywania sekretów w repozytorium.
 
 ### Krok 3 — Zmienne środowiskowe Vercela
 
@@ -213,33 +211,14 @@ npm run build         # produkcyjny build Next.js, działa bez sekretów
 npm run dev           # uruchomienie lokalne (wymaga .env.local)
 ```
 
-## Pozostałe ryzyka zależności
+## Stan zależności
 
-Po aktualizacji do `next@15.5.22`, `fast-uri@3.1.5`,
-`@hono/node-server@1.19.17` i bezpiecznego `postcss@8.5.25`, wynik
-`npm audit --omit=dev` zawiera te same 5 wpisów pakietów. npm 10.9.4
-(wersja odpowiadająca CI na Node 20) agreguje je jako 2 umiarkowane i 3
-wysokie, a npm 11.9.0 jako 3 umiarkowane i 2 wysokie. Różnica dotyczy
-wyłącznie agregującego wpisu `mcp-handler`, nie zestawu advisory ani kodu.
-
-- `@hono/node-server` i wynikowy wpis `@modelcontextprotocol/sdk`, 2
-  umiarkowane pozycje, dotyczą tego samego traversalu w `serve-static` na
-  Windows. CI i lokalny build kontrolny działają na Linuxie, a Helios nie
-  używa API `serve-static`; pakiet nie występuje w trace żadnej trasy
-  aplikacji. To
-  istotnie ogranicza osiągalność, ale nie jest gwarancją braku ryzyka.
-  Poprawka wskazana przez npm wymaga migracji z `mcp-handler@1.1.0` do 2.x,
-  czyli zmiany major i nowego pakietu serwera MCP. Nie została wykonana bez
-  osobnego testu kompatybilności protokołu.
-- `sharp@0.34.5`, wynikowy wpis `next` oraz agregujący ich zależności wpis
-  `mcp-handler`, 3 wysokie pozycje, obejmują podatności libvips. Wpis
-  `mcp-handler` nie jest trzecią niezależną podatnością źródłową; ma poziom
-  wysoki, ponieważ zależy jednocześnie od `next` i podatnego łańcucha SDK.
-  Helios nie używa `next/image` ani nie przetwarza obrazów, ale
-  `sharp` znajduje się w ogólnym trace serwera Next.js, więc nie deklarujemy
-  go jako całkowicie nieosiągalnego. Stabilna poprawka wymaga `sharp@0.35.x`,
-  poza zakresem `^0.34.3` deklarowanym przez Next.js 15.5.22. Wymuszenie
-  nieobsługiwanej wersji albo downgrade Next.js nie zostały zastosowane.
+Serwer używa `mcp-handler@2.1.0`, `@modelcontextprotocol/server@2.0.0` i
+`zod@4.2.0`. Migracja usunęła nieużywany łańcuch starego SDK/Hono. Override
+`sharp@0.35.3` usuwa podatny wariant libvips instalowany opcjonalnie przez
+Next.js. Helios nie korzysta z `next/image`, ale wersja poprawiona jest mimo
+to walidowana pełnym buildem produkcyjnym. Aktualny wynik
+`npm audit --omit=dev` to 0 znanych podatności.
 
 Szczegóły architektury i decyzji: [`docs/PLAN.md`](docs/PLAN.md).
 
@@ -254,9 +233,12 @@ Szczegóły architektury i decyzji: [`docs/PLAN.md`](docs/PLAN.md).
   i host redirect_uri, zanim rozpocznie się logowanie Google. Kod
   autoryzacyjny NIGDY nie jest wydawany bez świadomego kliknięcia „Zezwól".
   Formularz zgody chroniony przed CSRF przez wymagany double-submit cookie
-  oraz dodatkową walidację `Origin` / `Sec-Fetch-Site`. Izolowany popup OAuth
+  porównywany w stałym czasie oraz obowiązkową walidację `Origin` /
+  `Sec-Fetch-Site`. Duplikaty ciasteczka i brak sygnałów przeglądarki są
+  odrzucane. Izolowany popup OAuth
   może wysłać `Origin: null`, ale jest akceptowany tylko przy
-  `Sec-Fetch-Site: same-origin` i prawidłowym cookie.
+  `Sec-Fetch-Site: same-origin` i prawidłowym cookie. Odpowiedź po POST używa
+  `303 See Other`, a CSP dopuszcza tylko zweryfikowane originy HTTPS.
 - Opcjonalna allowlista `ALLOWED_OAUTH_REDIRECT_URIS` (dokładne dopasowanie,
   fail-closed) jako dodatkowa warstwa obok ekranu zgody.
 - Kod autoryzacyjny jest **jednorazowy**: atomowe zużycie `jti` przez Helios
@@ -288,4 +270,9 @@ Szczegóły architektury i decyzji: [`docs/PLAN.md`](docs/PLAN.md).
   podpowiedź, nie uwierzytelniony fakt.
 - Adapter nie zawiera funkcji zapisu, przenoszenia, usuwania ani zmiany
   uprawnień plików Helios.
+- Wszystkie narzędzia MCP mają jawne adnotacje `readOnlyHint: true`,
+  `destructiveHint: false`, `idempotentHint: true` i `openWorldHint: false`
+  oraz ścisłe schematy wejścia i wyjścia.
+- Publiczne wyniki MCP nie ujawniają wewnętrznych identyfikatorów plików ani
+  folderów Google Drive.
 - Sekrety wyłącznie w zmiennych środowiskowych; nigdy w repozytorium ani w błędach.

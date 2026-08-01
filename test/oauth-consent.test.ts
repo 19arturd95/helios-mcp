@@ -34,7 +34,7 @@ function consentReq(
   fields: Record<string, string>,
   cookie?: string,
   ip = "203.0.113.20",
-  browserHeaders: Record<string, string> = {},
+  browserHeaders: Record<string, string> = { origin: BASE_URL, "sec-fetch-site": "same-origin" },
 ): Request {
   const form = new URLSearchParams(fields);
   const headers: Record<string, string> = {
@@ -57,7 +57,7 @@ test("Zezwól: przekierowuje do Google, ustawia state, czyści ciasteczko CSRF",
   const res = await consentPost(
     consentReq({ consent_token: consentToken, csrf_token: csrf, decision: "allow" }, `helios_csrf=${csrf}`),
   );
-  assert.equal(res.status, 302);
+  assert.equal(res.status, 303);
   const location = res.headers.get("location") ?? "";
   assert.match(location, /^https:\/\/accounts\.google\.com\//);
   const url = new URL(location);
@@ -76,7 +76,7 @@ test("Odrzuć: wraca do redirect_uri klienta z error=access_denied, BEZ kodu", a
   const res = await consentPost(
     consentReq({ consent_token: consentToken, csrf_token: csrf, decision: "deny" }, `helios_csrf=${csrf}`),
   );
-  assert.equal(res.status, 302);
+  assert.equal(res.status, 303);
   const location = res.headers.get("location") ?? "";
   assert.match(location, /^https:\/\/client\.example\.com\/cb/);
   const url = new URL(location);
@@ -115,8 +115,52 @@ test("formularz z Origin: null z izolowanego popupu działa przy same-origin i p
       { origin: "null", "sec-fetch-site": "same-origin" },
     ),
   );
-  assert.equal(res.status, 302);
+  assert.equal(res.status, 303);
   assert.match(res.headers.get("location") ?? "", /^https:\/\/accounts\.google\.com\//);
+});
+
+test("brak sygnałów przeglądarki jest odrzucany nawet z pasującym CSRF", async () => {
+  resetRateLimitState();
+  const csrf = "csrf-bez-sygnalow-przegladarki";
+  const consentToken = await makeConsentToken();
+  const res = await consentPost(
+    consentReq(
+      { consent_token: consentToken, csrf_token: csrf, decision: "allow" },
+      `helios_csrf=${csrf}`,
+      "203.0.113.25",
+      {},
+    ),
+  );
+  assert.equal(res.status, 400);
+  assert.equal(res.headers.get("location"), null);
+});
+
+test("duplikat ciasteczka CSRF jest odrzucany fail-closed", async () => {
+  resetRateLimitState();
+  const csrf = "csrf-z-duplikatem-cookie";
+  const consentToken = await makeConsentToken();
+  const res = await consentPost(
+    consentReq(
+      { consent_token: consentToken, csrf_token: csrf, decision: "allow" },
+      `helios_csrf=${csrf}; helios_csrf=${csrf}`,
+    ),
+  );
+  assert.equal(res.status, 400);
+  assert.equal(res.headers.get("location"), null);
+});
+
+test("nieznana decyzja zgody jest odrzucana zamiast traktowania jej jak odmowy", async () => {
+  resetRateLimitState();
+  const csrf = "csrf-nieprawidlowej-decyzji";
+  const consentToken = await makeConsentToken();
+  const res = await consentPost(
+    consentReq(
+      { consent_token: consentToken, csrf_token: csrf, decision: "cokolwiek" },
+      `helios_csrf=${csrf}`,
+    ),
+  );
+  assert.equal(res.status, 400);
+  assert.equal(res.headers.get("location"), null);
 });
 
 test("formularz same-origin bez ciasteczka CSRF jest odrzucany", async () => {

@@ -6,8 +6,16 @@
  */
 
 import type { HeliosConfig } from "../config";
-import { callAdapter, type AdapterClientConfig } from "../drive/client";
-import type { AdapterOp, ListTreeResult, ReadResult, SearchResult, StatusResult, TreeNode } from "../drive/types";
+import { callAdapter, DriveAdapterError, type AdapterClientConfig } from "../drive/client";
+import type {
+  AdapterOp,
+  ListTreeResult,
+  ReadResult,
+  SearchHit,
+  SearchResult,
+  StatusResult,
+  TreeNode,
+} from "../drive/types";
 import { normalizePath } from "../security/paths";
 import { PATHS } from "./constants";
 import type { GetContextInput, ListTreeInput, ReadNoteInput, ReviewInboxInput, SearchInput } from "./schemas";
@@ -16,6 +24,54 @@ export interface ToolContext {
   config: HeliosConfig;
   /** Wywołanie operacji adaptera. Wstrzykiwalne w testach. */
   call: <T = unknown>(op: AdapterOp, args?: Record<string, unknown>) => Promise<T>;
+}
+
+/** Publiczne wyniki MCP. Celowo nie zawierają identyfikatorów Google Drive. */
+export type PublicStatusResult = Omit<StatusResult, "rootId">;
+export type PublicReadResult = Omit<ReadResult, "id">;
+export type PublicSearchHit = Omit<SearchHit, "id">;
+export interface PublicSearchResult {
+  query: string;
+  hits: PublicSearchHit[];
+  truncated?: boolean;
+}
+export interface PublicTreeNode {
+  path: string;
+  name: string;
+  type: "folder" | "file";
+  modifiedTime?: string;
+  children?: PublicTreeNode[];
+}
+export interface PublicListTreeResult {
+  root: PublicTreeNode;
+  truncated?: boolean;
+}
+
+function publicRead(result: ReadResult): PublicReadResult {
+  const { id: _id, ...safe } = result;
+  return safe;
+}
+
+function publicSearch(result: SearchResult): PublicSearchResult {
+  return {
+    query: result.query,
+    hits: result.hits.map(({ id: _id, ...safe }) => safe),
+    ...(result.truncated === undefined ? {} : { truncated: result.truncated }),
+  };
+}
+
+function publicTree(node: TreeNode): PublicTreeNode {
+  return {
+    path: node.path,
+    name: node.name,
+    type: node.type,
+    ...(node.modifiedTime === undefined ? {} : { modifiedTime: node.modifiedTime }),
+    ...(node.children === undefined ? {} : { children: node.children.map(publicTree) }),
+  };
+}
+
+function isAdapterNotFound(error: unknown, message: string): boolean {
+  return error instanceof DriveAdapterError && error.message === message;
 }
 
 /** Buduje domyślny kontekst narzędzi z realnym klientem adaptera. */
@@ -32,45 +88,53 @@ export function makeToolContext(config: HeliosConfig, fetchImpl?: typeof fetch):
   };
 }
 
-async function readSafe(ctx: ToolContext, path: string): Promise<ReadResult | null> {
+async function readSafe(ctx: ToolContext, path: string): Promise<PublicReadResult | null> {
   try {
     const safe = normalizePath(path);
-    return await ctx.call<ReadResult>("read", { path: safe });
-  } catch {
-    return null; // plik może nie istnieć — to nie błąd krytyczny
+    return publicRead(await ctx.call<ReadResult>("read", { path: safe }));
+  } catch (error) {
+    if (isAdapterNotFound(error, "Notatka nie istnieje.")) return null;
+    throw error;
   }
 }
 
 // --- helios_status -------------------------------------------------------
-export async function handleStatus(ctx: ToolContext): Promise<StatusResult> {
-  return ctx.call<StatusResult>("status");
+export async function handleStatus(ctx: ToolContext): Promise<PublicStatusResult> {
+  const { rootId: _rootId, ...safe } = await ctx.call<StatusResult>("status");
+  return safe;
 }
 
 // --- helios_read_note ----------------------------------------------------
-export async function handleReadNote(ctx: ToolContext, input: ReadNoteInput): Promise<ReadResult> {
+export async function handleReadNote(ctx: ToolContext, input: ReadNoteInput): Promise<PublicReadResult> {
   const safe = normalizePath(input.path);
-  return ctx.call<ReadResult>("read", { path: safe });
+  return publicRead(await ctx.call<ReadResult>("read", { path: safe }));
 }
 
 // --- helios_search -------------------------------------------------------
-export async function handleSearch(ctx: ToolContext, input: SearchInput): Promise<SearchResult> {
-  return ctx.call<SearchResult>("search", { query: input.query, limit: input.limit ?? 10 });
+export async function handleSearch(ctx: ToolContext, input: SearchInput): Promise<PublicSearchResult> {
+  return publicSearch(
+    await ctx.call<SearchResult>("search", { query: input.query, limit: input.limit ?? 10 }),
+  );
 }
 
 // --- helios_list_tree ----------------------------------------------------
-export async function handleListTree(ctx: ToolContext, input: ListTreeInput): Promise<ListTreeResult> {
+export async function handleListTree(ctx: ToolContext, input: ListTreeInput): Promise<PublicListTreeResult> {
   const path = input.path ? normalizePath(input.path, { requireExtension: false }) : undefined;
-  return ctx.call<ListTreeResult>("listTree", { path, maxDepth: input.maxDepth ?? 4 });
+  const result = await ctx.call<ListTreeResult>("listTree", { path, maxDepth: input.maxDepth ?? 4 });
+  return {
+    root: publicTree(result.root),
+    ...(result.truncated === undefined ? {} : { truncated: result.truncated }),
+  };
 }
 
 // --- helios_get_context --------------------------------------------------
 export interface GetContextResult {
   system: {
-    agents: ReadResult | null;
-    schema: ReadResult | null;
-    index: ReadResult | null;
+    agents: PublicReadResult | null;
+    schema: PublicReadResult | null;
+    index: PublicReadResult | null;
   };
-  related: SearchResult;
+  related: PublicSearchResult;
   input: { date: string; hints: string[] };
   note: string;
 }
@@ -92,10 +156,10 @@ export async function handleGetContext(
     readSafe(ctx, PATHS.schema),
     readSafe(ctx, PATHS.wikiIndex),
   ]);
-  const related = await ctx.call<SearchResult>("search", {
+  const related = publicSearch(await ctx.call<SearchResult>("search", {
     query: buildQuery(input),
     limit: 8,
-  });
+  }));
   return {
     system: { agents, schema, index },
     related,
@@ -125,8 +189,11 @@ export async function handleInboxStatus(ctx: ToolContext): Promise<InboxStatusRe
   let tree: ListTreeResult;
   try {
     tree = await ctx.call<ListTreeResult>("listTree", { path: PATHS.inboxDir, maxDepth: 2 });
-  } catch {
-    return { inboxPath: PATHS.inboxDir, entryCount: 0, entries: [] };
+  } catch (error) {
+    if (isAdapterNotFound(error, "Folder nie istnieje.")) {
+      return { inboxPath: PATHS.inboxDir, entryCount: 0, entries: [] };
+    }
+    throw error;
   }
   const entries: InboxStatusResult["entries"] = [];
   const walk = (node: TreeNode) => {
@@ -139,8 +206,8 @@ export async function handleInboxStatus(ctx: ToolContext): Promise<InboxStatusRe
 
 // --- helios_review_inbox -------------------------------------------------
 export interface ReviewInboxEntry {
-  entry: ReadResult;
-  related: SearchResult;
+  entry: PublicReadResult;
+  related: PublicSearchResult;
 }
 export interface ReviewInboxResult {
   inboxPath: string;
@@ -158,10 +225,10 @@ export async function handleReviewInbox(
   for (const meta of status.entries.slice(0, limit)) {
     const entry = await readSafe(ctx, meta.path);
     if (!entry) continue;
-    const related = await ctx.call<SearchResult>("search", {
+    const related = publicSearch(await ctx.call<SearchResult>("search", {
       query: entry.content.slice(0, 200),
       limit: 5,
-    });
+    }));
     reviewed.push({ entry, related });
   }
   return {

@@ -66,7 +66,11 @@ export function htmlError(
     `<h1>${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p></body>`;
   return new Response(body, {
     status,
-    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", ...extraHeaders },
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      ...htmlSecurityHeaders(),
+      ...extraHeaders,
+    },
   });
 }
 
@@ -80,7 +84,10 @@ function formActionOrigins(urls: readonly string[]): string[] {
   for (const value of urls) {
     try {
       const url = new URL(value);
-      if ((url.protocol === "https:" || url.protocol === "http:") && url.origin !== "null") {
+      const isHttps = url.protocol === "https:";
+      const isLocalHttp =
+        url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1");
+      if ((isHttps || isLocalHttp) && url.origin !== "null") {
         origins.add(url.origin);
       }
     } catch {
@@ -107,6 +114,9 @@ export function htmlSecurityHeaders(allowedFormActionUrls: readonly string[] = [
     "content-security-policy":
       `default-src 'none'; style-src 'unsafe-inline'; form-action ${formAction}; frame-ancestors 'none'; base-uri 'none'`,
     "referrer-policy": "no-referrer",
+    "permissions-policy":
+      "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
     "cache-control": "no-store",
   };
 }

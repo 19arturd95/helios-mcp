@@ -19,6 +19,7 @@
 import { loadConfig } from "@/lib/config";
 import { issueOAuthState, verifyConsentToken } from "@/lib/auth/tokens";
 import { enforceRateLimit } from "@/lib/security/rateLimit";
+import { constantTimeEqual } from "@/lib/security/signing";
 import { htmlError } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
@@ -26,13 +27,15 @@ export const dynamic = "force-dynamic";
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const CSRF_COOKIE = "helios_csrf";
 
-function readCookie(req: Request, name: string): string | undefined {
+function readSingleCookie(req: Request, name: string): string | undefined {
   const header = req.headers.get("cookie") ?? "";
+  const values: string[] = [];
   for (const part of header.split(";")) {
     const [k, ...rest] = part.trim().split("=");
-    if (k === name) return rest.join("=");
+    if (k === name) values.push(rest.join("="));
   }
-  return undefined;
+  // Duplikaty tej samej nazwy są niejednoznaczne (np. różne Path). Fail closed.
+  return values.length === 1 ? values[0] : undefined;
 }
 
 type BrowserSubmissionSignal = "trusted" | "invalid" | "absent";
@@ -79,16 +82,22 @@ export async function POST(req: Request) {
   const csrfBody = String(form.get("csrf_token") ?? "");
   const decision = String(form.get("decision") ?? "");
 
-  const csrfCookie = readCookie(req, CSRF_COOKIE);
-  const cookieMatches = Boolean(csrfCookie && csrfBody && csrfCookie === csrfBody);
+  const csrfCookie = readSingleCookie(req, CSRF_COOKIE);
+  const cookieMatches = Boolean(
+    csrfCookie && csrfBody && constantTimeEqual(csrfCookie, csrfBody),
+  );
   const browserSignal = browserSubmissionSignal(req, cfg.baseUrl);
-  if (!cookieMatches || browserSignal === "invalid") {
+  if (!cookieMatches || browserSignal !== "trusted") {
     return htmlError(
       "Błąd bezpieczeństwa",
       "Nieprawidłowe źródło żądania lub token CSRF. Rozpocznij logowanie ponownie.",
       400,
       { "set-cookie": clearCsrf },
     );
+  }
+
+  if (decision !== "allow" && decision !== "deny") {
+    return htmlError("Błąd", "Nieprawidłowa decyzja zgody.", 400, { "set-cookie": clearCsrf });
   }
 
   let claims;
@@ -119,7 +128,7 @@ export async function POST(req: Request) {
     if (claims.state) redirectBase.searchParams.set("state", claims.state);
     redirectBase.searchParams.set("iss", cfg.baseUrl);
     return new Response(null, {
-      status: 302,
+      status: 303,
       headers: { location: redirectBase.toString(), "set-cookie": clearCsrf, "cache-control": "no-store" },
     });
   }
@@ -143,7 +152,7 @@ export async function POST(req: Request) {
   googleUrl.searchParams.set("prompt", "select_account");
 
   return new Response(null, {
-    status: 302,
+    status: 303,
     headers: { location: googleUrl.toString(), "set-cookie": clearCsrf, "cache-control": "no-store" },
   });
 }
