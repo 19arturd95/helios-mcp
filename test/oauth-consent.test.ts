@@ -103,19 +103,51 @@ test("brak ciasteczka CSRF jest odrzucany", async () => {
   assert.equal(res.status, 400);
 });
 
-test("formularz same-origin działa bez ciasteczka blokowanego przez popup OAuth", async () => {
+test("formularz z Origin: null z izolowanego popupu działa przy same-origin i prawidłowym cookie", async () => {
   resetRateLimitState();
+  const csrf = "csrf-z-izolowanego-popupu";
   const consentToken = await makeConsentToken();
   const res = await consentPost(
     consentReq(
-      { consent_token: consentToken, csrf_token: "csrf-utracony-przez-popup", decision: "allow" },
-      undefined,
+      { consent_token: consentToken, csrf_token: csrf, decision: "allow" },
+      `helios_csrf=${csrf}`,
       "203.0.113.21",
-      { origin: BASE_URL, "sec-fetch-site": "same-origin" },
+      { origin: "null", "sec-fetch-site": "same-origin" },
     ),
   );
   assert.equal(res.status, 302);
   assert.match(res.headers.get("location") ?? "", /^https:\/\/accounts\.google\.com\//);
+});
+
+test("formularz same-origin bez ciasteczka CSRF jest odrzucany", async () => {
+  resetRateLimitState();
+  const consentToken = await makeConsentToken();
+  const res = await consentPost(
+    consentReq(
+      { consent_token: consentToken, csrf_token: "brak-cookie", decision: "allow" },
+      undefined,
+      "203.0.113.23",
+      { origin: BASE_URL, "sec-fetch-site": "same-origin" },
+    ),
+  );
+  assert.equal(res.status, 400);
+  assert.equal(res.headers.get("location"), null);
+});
+
+test("Origin: null bez potwierdzenia same-origin jest odrzucany", async () => {
+  resetRateLimitState();
+  const csrf = "csrf-z-niezaufanego-kontekstu";
+  const consentToken = await makeConsentToken();
+  const res = await consentPost(
+    consentReq(
+      { consent_token: consentToken, csrf_token: csrf, decision: "allow" },
+      `helios_csrf=${csrf}`,
+      "203.0.113.24",
+      { origin: "null", "sec-fetch-site": "cross-site" },
+    ),
+  );
+  assert.equal(res.status, 400);
+  assert.equal(res.headers.get("location"), null);
 });
 
 test("cross-site POST jest odrzucany nawet z pasującym ciasteczkiem CSRF", async () => {

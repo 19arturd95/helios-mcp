@@ -2,12 +2,13 @@
  * Obsługa decyzji użytkownika z ekranu zgody (`/oauth/authorize`).
  *
  * Wyłącznie POST — świadome zatwierdzenie formularza, nigdy automatyczny
- * redirect z GET. Ochrona CSRF łączy dwa sygnały przeglądarki:
- *  - formularz same-origin potwierdzony przez `Origin` / `Sec-Fetch-Site`,
- *  - double-submit cookie jako fallback dla klientów bez tych nagłówków.
+ * redirect z GET. Ochrona CSRF wymaga zgodności tokenu z formularza i
+ * double-submit cookie. Nagłówki `Origin` / `Sec-Fetch-Site` zapewniają
+ * dodatkową kontrolę źródła.
  *
- * Dzięki temu popupy OAuth, które nie zachowują ciasteczka ustawionego na
- * ekranie zgody, nadal działają. Cross-site POST pozostaje odrzucany.
+ * Okno OAuth uruchomione z izolowanego kontekstu może wysłać `Origin: null`
+ * mimo `Sec-Fetch-Site: same-origin`. Taki przypadek akceptujemy wyłącznie
+ * przy prawidłowym cookie. Cross-site POST pozostaje odrzucany.
  *
  *  - „Zezwól” → rozpoczyna logowanie Google (dopiero teraz, po świadomej
  *    zgodzie — nigdy wcześniej).
@@ -38,13 +39,16 @@ type BrowserSubmissionSignal = "trusted" | "invalid" | "absent";
 
 /**
  * Nowoczesne przeglądarki wysyłają `Origin` dla formularza POST oraz
- * `Sec-Fetch-Site`, którego skrypt strony nie może podrobić. Wartość
- * sprzeczna z originem Heliosa jest twardą odmową nawet przy poprawnym cookie.
+ * `Sec-Fetch-Site`, którego skrypt strony nie może podrobić. Jawnie obcy
+ * origin lub inny kontekst niż same-origin jest twardą odmową nawet przy
+ * poprawnym cookie. `Origin: null` może pochodzić z izolowanego popupu OAuth,
+ * dlatego ufamy mu tylko razem z `Sec-Fetch-Site: same-origin`.
  */
 function browserSubmissionSignal(req: Request, expectedOrigin: string): BrowserSubmissionSignal {
   const origin = req.headers.get("origin");
   const fetchSite = req.headers.get("sec-fetch-site");
 
+  if (origin === "null") return fetchSite === "same-origin" ? "trusted" : "invalid";
   if (origin !== null && origin !== expectedOrigin) return "invalid";
   if (fetchSite !== null && fetchSite !== "same-origin") return "invalid";
   if (origin === expectedOrigin || fetchSite === "same-origin") return "trusted";
@@ -78,7 +82,7 @@ export async function POST(req: Request) {
   const csrfCookie = readCookie(req, CSRF_COOKIE);
   const cookieMatches = Boolean(csrfCookie && csrfBody && csrfCookie === csrfBody);
   const browserSignal = browserSubmissionSignal(req, cfg.baseUrl);
-  if (browserSignal === "invalid" || (browserSignal === "absent" && !cookieMatches)) {
+  if (!cookieMatches || browserSignal === "invalid") {
     return htmlError(
       "Błąd bezpieczeństwa",
       "Nieprawidłowe źródło żądania lub token CSRF. Rozpocznij logowanie ponownie.",

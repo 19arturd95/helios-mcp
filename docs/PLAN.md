@@ -45,9 +45,10 @@ Przepływ:
    zgody** (HTML, GET) — pokazuje nazwę klienta i host redirect_uri.
    NIE przekierowuje automatycznie do Google.
 4. Użytkownik świadomie klika „Zezwól" → `POST /oauth/consent` (chronione
-   przed CSRF przez dokładną walidację same-origin `Origin` / `Sec-Fetch-Site`
-   oraz double-submit cookie jako fallback, stan zgody to podpisany,
-   krótkożyciowy JWT — `AUD_CONSENT`, TTL 5 min). Dopiero **teraz** następuje
+   przed CSRF przez wymagany double-submit cookie i dodatkową walidację
+   `Origin` / `Sec-Fetch-Site`; `Origin: null` z izolowanego popupu jest
+   akceptowany tylko przy `Sec-Fetch-Site: same-origin`, stan zgody to
+   podpisany, krótkożyciowy JWT — `AUD_CONSENT`, TTL 5 min). Dopiero **teraz** następuje
    przekierowanie do logowania Google; oryginalne parametry klienta przenosi podpisany
    `state` (`AUD_STATE`). „Odrzuć" (lub nieprawidłowa/wygasła zgoda) kończy
    proces przekierowaniem do klienta z `error=access_denied`, bez logowania

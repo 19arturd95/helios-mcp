@@ -253,9 +253,10 @@ Szczegóły architektury i decyzji: [`docs/PLAN.md`](docs/PLAN.md).
 - **Ekran zgody** na `/oauth/authorize` — zawsze pokazuje nazwę klienta OAuth
   i host redirect_uri, zanim rozpocznie się logowanie Google. Kod
   autoryzacyjny NIGDY nie jest wydawany bez świadomego kliknięcia „Zezwól".
-  Formularz zgody chroniony przed CSRF przez dokładną walidację same-origin
-  (`Origin` / `Sec-Fetch-Site`) oraz double-submit cookie jako fallback dla
-  środowisk, które nie wysyłają tych nagłówków.
+  Formularz zgody chroniony przed CSRF przez wymagany double-submit cookie
+  oraz dodatkową walidację `Origin` / `Sec-Fetch-Site`. Izolowany popup OAuth
+  może wysłać `Origin: null`, ale jest akceptowany tylko przy
+  `Sec-Fetch-Site: same-origin` i prawidłowym cookie.
 - Opcjonalna allowlista `ALLOWED_OAUTH_REDIRECT_URIS` (dokładne dopasowanie,
   fail-closed) jako dodatkowa warstwa obok ekranu zgody.
 - Kod autoryzacyjny jest **jednorazowy**: atomowe zużycie `jti` przez Helios
