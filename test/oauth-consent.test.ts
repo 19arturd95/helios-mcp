@@ -30,11 +30,17 @@ async function makeConsentToken(overrides: Partial<Parameters<typeof issueConsen
   });
 }
 
-function consentReq(fields: Record<string, string>, cookie?: string, ip = "203.0.113.20"): Request {
+function consentReq(
+  fields: Record<string, string>,
+  cookie?: string,
+  ip = "203.0.113.20",
+  browserHeaders: Record<string, string> = {},
+): Request {
   const form = new URLSearchParams(fields);
   const headers: Record<string, string> = {
     "content-type": "application/x-www-form-urlencoded",
     "x-forwarded-for": ip,
+    ...browserHeaders,
   };
   if (cookie) headers["cookie"] = cookie;
   return new Request("https://helios.example.com/oauth/consent", {
@@ -95,6 +101,37 @@ test("brak ciasteczka CSRF jest odrzucany", async () => {
   const consentToken = await makeConsentToken();
   const res = await consentPost(consentReq({ consent_token: consentToken, csrf_token: "cokolwiek", decision: "allow" }));
   assert.equal(res.status, 400);
+});
+
+test("formularz same-origin działa bez ciasteczka blokowanego przez popup OAuth", async () => {
+  resetRateLimitState();
+  const consentToken = await makeConsentToken();
+  const res = await consentPost(
+    consentReq(
+      { consent_token: consentToken, csrf_token: "csrf-utracony-przez-popup", decision: "allow" },
+      undefined,
+      "203.0.113.21",
+      { origin: BASE_URL, "sec-fetch-site": "same-origin" },
+    ),
+  );
+  assert.equal(res.status, 302);
+  assert.match(res.headers.get("location") ?? "", /^https:\/\/accounts\.google\.com\//);
+});
+
+test("cross-site POST jest odrzucany nawet z pasującym ciasteczkiem CSRF", async () => {
+  resetRateLimitState();
+  const csrf = "csrf-cookie-nie-wystarcza";
+  const consentToken = await makeConsentToken();
+  const res = await consentPost(
+    consentReq(
+      { consent_token: consentToken, csrf_token: csrf, decision: "allow" },
+      `helios_csrf=${csrf}`,
+      "203.0.113.22",
+      { origin: "https://attacker.example", "sec-fetch-site": "cross-site" },
+    ),
+  );
+  assert.equal(res.status, 400);
+  assert.equal(res.headers.get("location"), null);
 });
 
 test("zmodyfikowany (podrobiony) stan zgody jest odrzucany", async () => {
