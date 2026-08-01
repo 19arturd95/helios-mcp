@@ -71,16 +71,41 @@ export function htmlError(
 }
 
 /**
+ * Zamienia zweryfikowane adresy przekierowań na bezpieczne źródła CSP.
+ * Do nagłówka trafia wyłącznie origin HTTP(S), nigdy ścieżka, zapytanie ani
+ * surowa wartość, która mogłaby wstrzyknąć kolejną dyrektywę.
+ */
+function formActionOrigins(urls: readonly string[]): string[] {
+  const origins = new Set<string>();
+  for (const value of urls) {
+    try {
+      const url = new URL(value);
+      if ((url.protocol === "https:" || url.protocol === "http:") && url.origin !== "null") {
+        origins.add(url.origin);
+      }
+    } catch {
+      // Nieprawidłowy adres nie poszerza polityki CSP.
+    }
+  }
+  return [...origins];
+}
+
+/**
  * Nagłówki bezpieczeństwa dla stron HTML renderowanych przez nasz serwer
  * (ekran zgody OAuth). CSP blokuje ładowanie jakichkolwiek zasobów zewnętrznych
  * i skryptów; `frame-ancestors 'none'` chroni przed clickjackingiem.
+ *
+ * Przeglądarki stosują `form-action` także do celów odpowiedzi 302 po wysłaniu
+ * formularza. Dlatego ekran zgody musi jawnie dopuścić zweryfikowane cele
+ * przekierowania OAuth, zachowując jednocześnie zamkniętą listę źródeł.
  */
-export function htmlSecurityHeaders(): Record<string, string> {
+export function htmlSecurityHeaders(allowedFormActionUrls: readonly string[] = []): Record<string, string> {
+  const formAction = ["'self'", ...formActionOrigins(allowedFormActionUrls)].join(" ");
   return {
     "x-content-type-options": "nosniff",
     "x-frame-options": "DENY",
     "content-security-policy":
-      "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+      `default-src 'none'; style-src 'unsafe-inline'; form-action ${formAction}; frame-ancestors 'none'; base-uri 'none'`,
     "referrer-policy": "no-referrer",
     "cache-control": "no-store",
   };

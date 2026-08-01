@@ -141,7 +141,10 @@ test("poprawne żądanie renderuje ekran zgody (nie przekierowuje automatycznie 
   // Nagłówki bezpieczeństwa ekranu zgody.
   assert.equal(res.headers.get("x-frame-options"), "DENY");
   assert.equal(res.headers.get("x-content-type-options"), "nosniff");
-  assert.match(res.headers.get("content-security-policy") ?? "", /frame-ancestors 'none'/);
+  const csp = res.headers.get("content-security-policy") ?? "";
+  assert.match(csp, /frame-ancestors 'none'/);
+  assert.match(csp, /form-action 'self' https:\/\/accounts\.google\.com https:\/\/client\.example\.com/);
+  assert.doesNotMatch(csp, /client\.example\.com\/cb/);
   assert.equal(res.headers.get("cache-control"), "no-store");
 
   // Ciasteczko CSRF ustawione, HttpOnly.

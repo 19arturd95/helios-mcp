@@ -23,6 +23,7 @@ export const dynamic = "force-dynamic";
 /** Nazwa i ścieżka ciasteczka CSRF dla formularza zgody. TTL musi pasować do TTL tokenu zgody. */
 const CSRF_COOKIE = "helios_csrf";
 const CSRF_TTL_SECONDS = 300;
+const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 
 function renderConsentPage(params: {
   clientName: string;
@@ -144,7 +145,7 @@ export async function GET(req: Request) {
     status: 200,
     headers: {
       "content-type": "text/html; charset=utf-8",
-      ...htmlSecurityHeaders(),
+      ...htmlSecurityHeaders([GOOGLE_AUTH_URL, redirectUri]),
       "set-cookie": `${CSRF_COOKIE}=${csrfToken}; Path=/oauth/consent; Max-Age=${CSRF_TTL_SECONDS}; HttpOnly; SameSite=Lax${isHttps ? "; Secure" : ""}`,
     },
   });
