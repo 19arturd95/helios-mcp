@@ -45,9 +45,10 @@ Przepływ:
    zgody** (HTML, GET) — pokazuje nazwę klienta i host redirect_uri.
    NIE przekierowuje automatycznie do Google.
 4. Użytkownik świadomie klika „Zezwól" → `POST /oauth/consent` (chronione
-   CSRF wzorcem double-submit-cookie, stan zgody to podpisany, krótkożyciowy
-   JWT — `AUD_CONSENT`, TTL 5 min). Dopiero **teraz** następuje przekierowanie
-   do logowania Google; oryginalne parametry klienta przenosi podpisany
+   przed CSRF przez dokładną walidację same-origin `Origin` / `Sec-Fetch-Site`
+   oraz double-submit cookie jako fallback, stan zgody to podpisany,
+   krótkożyciowy JWT — `AUD_CONSENT`, TTL 5 min). Dopiero **teraz** następuje
+   przekierowanie do logowania Google; oryginalne parametry klienta przenosi podpisany
    `state` (`AUD_STATE`). „Odrzuć" (lub nieprawidłowa/wygasła zgoda) kończy
    proces przekierowaniem do klienta z `error=access_denied`, bez logowania
    do Google i bez wydania kodu.
@@ -184,7 +185,7 @@ nie jest testowana na poziomie HTTP (jose na Node pobiera JWKS przez
 sensownie zamockować) — logika PO weryfikacji podpisu jest wydzielona do
 `lib/auth/googleIdentity.ts` i tam w pełni testowana.
 
-Aktualny wynik: 115 testów, 115 zaliczonych, 0 pominiętych. Oba typechecki i
+Aktualny wynik: 117 testów, 117 zaliczonych, 0 pominiętych. Oba typechecki i
 produkcyjny build Next.js przechodzą. Build nie wymaga sekretów. Pełny E2E
 OAuth z prawdziwym Google JWKS oraz klientami Claude i ChatGPT nie został
 wykonany, ponieważ nie ma jeszcze wybranego ani skonfigurowanego hostingu.

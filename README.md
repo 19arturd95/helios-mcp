@@ -15,7 +15,7 @@ ChatGPT / Claude  →  Helios MCP (Next.js, jeszcze niewdrożony)  →  Helios D
 ## Stan weryfikacji Fazy 1
 
 - produkcyjny build Next.js przechodzi bez sekretów i zmiennych środowiskowych,
-- testy lokalne: 115/115, bez pominiętych testów,
+- testy lokalne: 117/117, bez pominiętych testów,
 - oba typechecki przechodzą,
 - CI dla pull requestów wykonuje `npm ci`, testy, oba typechecki i build,
 - `npm audit --omit=dev`: 5 wpisów pakietów wynikających z 2 źródłowych
@@ -253,7 +253,9 @@ Szczegóły architektury i decyzji: [`docs/PLAN.md`](docs/PLAN.md).
 - **Ekran zgody** na `/oauth/authorize` — zawsze pokazuje nazwę klienta OAuth
   i host redirect_uri, zanim rozpocznie się logowanie Google. Kod
   autoryzacyjny NIGDY nie jest wydawany bez świadomego kliknięcia „Zezwól".
-  Formularz zgody chroniony przed CSRF (double-submit cookie).
+  Formularz zgody chroniony przed CSRF przez dokładną walidację same-origin
+  (`Origin` / `Sec-Fetch-Site`) oraz double-submit cookie jako fallback dla
+  środowisk, które nie wysyłają tych nagłówków.
 - Opcjonalna allowlista `ALLOWED_OAUTH_REDIRECT_URIS` (dokładne dopasowanie,
   fail-closed) jako dodatkowa warstwa obok ekranu zgody.
 - Kod autoryzacyjny jest **jednorazowy**: atomowe zużycie `jti` przez Helios
