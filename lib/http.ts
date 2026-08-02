@@ -14,6 +14,13 @@ export function corsHeaders(): Record<string, string> {
     "access-control-expose-headers": "www-authenticate, mcp-session-id",
     "access-control-max-age": "86400",
     "cache-control": "no-store",
+    // Odpowiedzi JSON (metadane OAuth, token, MCP) też potrzebują minimum
+    // nagłówków bezpieczeństwa: bez `nosniff` przeglądarka może zinterpretować
+    // treść jako HTML, a HSTS musi obowiązywać na CAŁEJ domenie, nie tylko na
+    // stronach HTML ekranu zgody.
+    "x-content-type-options": "nosniff",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "referrer-policy": "no-referrer",
   };
 }
 

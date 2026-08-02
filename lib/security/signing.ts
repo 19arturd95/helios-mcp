@@ -55,6 +55,18 @@ export function randomNonce(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/**
+ * SHA-256 w postaci hex. Używane do powiązania ciasteczka przeglądarki
+ * z podpisanym stanem OAuth: w stanie (JWT — payload jest jawnie czytelny
+ * po zdekodowaniu base64!) trzymamy WYŁĄCZNIE skrót, nigdy surową wartość
+ * ciasteczka. Dzięki temu przechwycenie samego `state` nie pozwala odtworzyć
+ * ciasteczka wymaganego w /oauth/callback.
+ */
+export async function sha256Hex(message: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(message));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 export interface SignOptions {
   timestamp?: number;
   nonce?: string;

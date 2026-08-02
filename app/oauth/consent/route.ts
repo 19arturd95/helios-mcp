@@ -19,24 +19,14 @@
 import { loadConfig } from "@/lib/config";
 import { issueOAuthState, verifyConsentToken } from "@/lib/auth/tokens";
 import { enforceRateLimit } from "@/lib/security/rateLimit";
-import { constantTimeEqual } from "@/lib/security/signing";
+import { constantTimeEqual, randomNonce, sha256Hex } from "@/lib/security/signing";
 import { htmlError } from "@/lib/http";
+import { loginCookieHeader, readSingleCookie } from "@/lib/auth/loginBinding";
 
 export const dynamic = "force-dynamic";
 
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const CSRF_COOKIE = "helios_csrf";
-
-function readSingleCookie(req: Request, name: string): string | undefined {
-  const header = req.headers.get("cookie") ?? "";
-  const values: string[] = [];
-  for (const part of header.split(";")) {
-    const [k, ...rest] = part.trim().split("=");
-    if (k === name) values.push(rest.join("="));
-  }
-  // Duplikaty tej samej nazwy są niejednoznaczne (np. różne Path). Fail closed.
-  return values.length === 1 ? values[0] : undefined;
-}
 
 type BrowserSubmissionSignal = "trusted" | "invalid" | "absent";
 
@@ -82,7 +72,7 @@ export async function POST(req: Request) {
   const csrfBody = String(form.get("csrf_token") ?? "");
   const decision = String(form.get("decision") ?? "");
 
-  const csrfCookie = readSingleCookie(req, CSRF_COOKIE);
+  const csrfCookie = readSingleCookie(req.headers.get("cookie"), CSRF_COOKIE);
   const cookieMatches = Boolean(
     csrfCookie && csrfBody && constantTimeEqual(csrfCookie, csrfBody),
   );
@@ -133,6 +123,11 @@ export async function POST(req: Request) {
     });
   }
 
+  // Powiązanie logowania Google z TĄ przeglądarką: losowe ciasteczko, którego
+  // skrót trafia do podpisanego `state`. Bez niego link do Google przygotowany
+  // przez atakującego działałby w przeglądarce ofiary — patrz lib/auth/loginBinding.ts.
+  const loginSecret = randomNonce();
+  const googleNonce = randomNonce();
   const oauthState = await issueOAuthState(cfg.authSecret, cfg.baseUrl, {
     clientId: claims.clientId,
     redirectUri: claims.redirectUri,
@@ -140,6 +135,8 @@ export async function POST(req: Request) {
     scope: claims.scope,
     resource: claims.resource,
     state: claims.state,
+    browserBinding: await sha256Hex(loginSecret),
+    googleNonce,
   });
 
   const googleUrl = new URL(GOOGLE_AUTH_URL);
@@ -148,11 +145,17 @@ export async function POST(req: Request) {
   googleUrl.searchParams.set("response_type", "code");
   googleUrl.searchParams.set("scope", "openid email");
   googleUrl.searchParams.set("state", oauthState);
+  googleUrl.searchParams.set("nonce", googleNonce);
   googleUrl.searchParams.set("access_type", "online");
   googleUrl.searchParams.set("prompt", "select_account");
 
   return new Response(null, {
     status: 303,
-    headers: { location: googleUrl.toString(), "set-cookie": clearCsrf, "cache-control": "no-store" },
+    headers: [
+      ["location", googleUrl.toString()],
+      ["set-cookie", clearCsrf],
+      ["set-cookie", loginCookieHeader(loginSecret, isHttps)],
+      ["cache-control", "no-store"],
+    ],
   });
 }

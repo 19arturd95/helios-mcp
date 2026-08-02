@@ -13,6 +13,14 @@
 import { SignJWT, jwtVerify } from "jose";
 import { randomNonce } from "../security/signing";
 
+/**
+ * Jedyny dopuszczony algorytm podpisu naszych tokenów. Jawna lista w
+ * `jwtVerify` zamyka klasę błędów "algorithm confusion": bez niej weryfikacja
+ * akceptowała także HS384/HS512, a przy ewentualnej zmianie typu klucza
+ * (np. na parę RSA) rozszerzyłaby się na algorytmy asymetryczne.
+ */
+const ALG = "HS256";
+
 const AUD_CLIENT = "helios:client";
 const AUD_CODE = "helios:auth_code";
 const AUD_STATE = "helios:oauth_state";
@@ -73,7 +81,7 @@ export async function issueClientId(
 ): Promise<string> {
   const iat = nowSeconds(now);
   return await new SignJWT({ redirect_uris: meta.redirectUris, client_name: meta.clientName ?? "" })
-    .setProtectedHeader({ alg: "HS256" })
+    .setProtectedHeader({ alg: ALG })
     .setIssuer(issuer)
     .setAudience(AUD_CLIENT)
     .setIssuedAt(iat)
@@ -88,6 +96,7 @@ export async function verifyClientId(
   now?: number,
 ): Promise<ClientMetadata> {
   const { payload } = await jwtVerify(clientId, key(authSecret), {
+    algorithms: [ALG],
     issuer,
     audience: AUD_CLIENT,
     currentDate: now !== undefined ? new Date(now * 1000) : undefined,
@@ -138,7 +147,7 @@ export async function issueAuthorizationCode(
     scope: claims.scope,
     resource: claims.resource,
   })
-    .setProtectedHeader({ alg: "HS256" })
+    .setProtectedHeader({ alg: ALG })
     .setIssuer(issuer)
     .setAudience(AUD_CODE)
     .setJti(randomNonce())
@@ -154,6 +163,7 @@ export async function verifyAuthorizationCode(
   now?: number,
 ): Promise<VerifiedAuthCodeClaims> {
   const { payload } = await jwtVerify(code, key(authSecret), {
+    algorithms: [ALG],
     issuer,
     audience: AUD_CODE,
     currentDate: now !== undefined ? new Date(now * 1000) : undefined,
@@ -181,6 +191,17 @@ export interface OAuthStateClaims {
   scope: string;
   resource: string;
   state: string; // oryginalny `state` klienta MCP
+  /**
+   * SHA-256 wartości ciasteczka `helios_login`, ustawionego w tej samej
+   * przeglądarce, która kliknęła „Zezwól". `/oauth/callback` wymaga zgodności —
+   * bez tego atakujący mógłby przygotować własny link do Google i podstawić
+   * go ofierze, otrzymując kod autoryzacyjny wystawiony na jej konto
+   * (OAuth Security BCP / RFC 9700 §4.7 — powiązanie z user agentem).
+   * Trzymamy WYŁĄCZNIE skrót: payload JWT jest jawnie czytelny.
+   */
+  browserBinding: string;
+  /** OIDC `nonce` wysłany do Google i weryfikowany w `id_token` (RFC 9700 §4.4). */
+  googleNonce: string;
 }
 
 export async function issueOAuthState(
@@ -192,7 +213,7 @@ export async function issueOAuthState(
 ): Promise<string> {
   const iat = nowSeconds(now);
   return await new SignJWT({ ...claims })
-    .setProtectedHeader({ alg: "HS256" })
+    .setProtectedHeader({ alg: ALG })
     .setIssuer(issuer)
     .setAudience(AUD_STATE)
     .setIssuedAt(iat)
@@ -207,6 +228,7 @@ export async function verifyOAuthState(
   now?: number,
 ): Promise<OAuthStateClaims> {
   const { payload } = await jwtVerify(token, key(authSecret), {
+    algorithms: [ALG],
     issuer,
     audience: AUD_STATE,
     currentDate: now !== undefined ? new Date(now * 1000) : undefined,
@@ -218,6 +240,8 @@ export async function verifyOAuthState(
     scope: String(payload.scope ?? ""),
     resource: String(payload.resource ?? ""),
     state: String(payload.state ?? ""),
+    browserBinding: String(payload.browserBinding ?? ""),
+    googleNonce: String(payload.googleNonce ?? ""),
   };
 }
 
@@ -250,7 +274,7 @@ export async function issueConsentToken(
 ): Promise<string> {
   const iat = nowSeconds(now);
   return await new SignJWT({ ...claims })
-    .setProtectedHeader({ alg: "HS256" })
+    .setProtectedHeader({ alg: ALG })
     .setIssuer(issuer)
     .setAudience(AUD_CONSENT)
     .setIssuedAt(iat)
@@ -265,6 +289,7 @@ export async function verifyConsentToken(
   now?: number,
 ): Promise<ConsentClaims> {
   const { payload } = await jwtVerify(token, key(authSecret), {
+    algorithms: [ALG],
     issuer,
     audience: AUD_CONSENT,
     currentDate: now !== undefined ? new Date(now * 1000) : undefined,
@@ -304,7 +329,7 @@ export async function issueAccessToken(params: AccessTokenParams): Promise<strin
     client_id: params.clientId,
     token_type: "access",
   })
-    .setProtectedHeader({ alg: "HS256" })
+    .setProtectedHeader({ alg: ALG })
     .setIssuer(params.issuer)
     .setAudience(params.audience)
     .setSubject(params.email)
@@ -328,6 +353,7 @@ export async function verifyAccessToken(
   now?: number,
 ): Promise<VerifiedAccessToken> {
   const { payload } = await jwtVerify(token, key(authSecret), {
+    algorithms: [ALG],
     issuer,
     audience,
     currentDate: now !== undefined ? new Date(now * 1000) : undefined,

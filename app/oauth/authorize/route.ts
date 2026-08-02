@@ -68,6 +68,17 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const q = url.searchParams;
 
+  // RFC 6749 §3.1: parametr nie może wystąpić więcej niż raz. Wcześniej
+  // wygrywała pierwsza wartość, a `resource` był jedynym parametrem
+  // sprawdzanym ściśle — teraz reguła jest jednolita (fail closed) i zgodna
+  // z /oauth/token, więc żaden pośrednik nie zobaczy innych wartości niż my.
+  const DUPLICATABLE = new Set<string>();
+  for (const name of new Set(q.keys())) {
+    if (!DUPLICATABLE.has(name) && q.getAll(name).length > 1) {
+      return htmlError("Błąd autoryzacji", `Parametr ${name} nie może wystąpić więcej niż raz.`);
+    }
+  }
+
   const responseType = q.get("response_type");
   const clientId = q.get("client_id") ?? "";
   const redirectUri = q.get("redirect_uri") ?? "";
@@ -112,8 +123,7 @@ export async function GET(req: Request) {
 
   // MCP 2025-11-25 wymaga Resource Indicators (RFC 8707) zarówno w żądaniu
   // autoryzacji, jak i później w żądaniu tokenu. Brak lub inny zasób odrzucamy.
-  const resources = q.getAll("resource");
-  const resource = resources.length === 1 ? resources[0]! : "";
+  const resource = q.get("resource") ?? "";
   if (!isMcpResourceUrl(resource, cfg.baseUrl)) {
     return htmlError(
       "Błąd autoryzacji",
