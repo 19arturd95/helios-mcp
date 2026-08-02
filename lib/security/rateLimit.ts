@@ -19,6 +19,17 @@ interface Bucket {
 const buckets = new Map<string, Bucket>();
 let lastSweep = Date.now();
 
+/**
+ * Twardy limit liczby kubełków. Klucz zawiera adres IP z `x-forwarded-for`,
+ * więc klient rotujący ten nagłówek tworzył nowy wpis przy każdym żądaniu,
+ * a `sweepExpired` czyści mapę najwyżej raz na 60 s — mapa mogła więc rosnąć
+ * bez ograniczeń między zamiataniami (zmierzone: 50 tys. kluczy ≈ 19 MB sterty).
+ * Po przekroczeniu limitu usuwamy najstarsze wpisy (Map zachowuje kolejność
+ * wstawiania), co ogranicza zużycie pamięci kosztem wcześniejszego resetu
+ * licznika — limiter i tak jest best-effort (patrz nagłówek pliku).
+ */
+const MAX_BUCKETS = 10_000;
+
 export interface RateLimitResult {
   allowed: boolean;
   retryAfterSeconds: number;
@@ -35,6 +46,15 @@ export function checkRateLimit(key: string, opts: { limit: number; windowSeconds
   const now = Date.now();
   const existing = buckets.get(key);
   if (!existing || now - existing.windowStart >= opts.windowSeconds * 1000) {
+    if (!existing && buckets.size >= MAX_BUCKETS) {
+      // Usuń najstarsze wpisy (kolejność wstawiania), żeby mapa nie rosła bez końca.
+      const overflow = buckets.size - MAX_BUCKETS + 1;
+      let removed = 0;
+      for (const k of buckets.keys()) {
+        buckets.delete(k);
+        if (++removed >= overflow) break;
+      }
+    }
     buckets.set(key, { count: 1, windowStart: now });
     return { allowed: true, retryAfterSeconds: 0 };
   }

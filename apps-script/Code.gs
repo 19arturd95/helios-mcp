@@ -257,6 +257,20 @@ function assertDescendant_(file, rootId) {
   throw new Error('Plik znajduje się poza ROOT_FOLDER_ID.');
 }
 
+/**
+ * Notatki Helios to zwykłe pliki tekstowe. Pliki natywne Google (Docs/Sheets/
+ * Slides/shortcuty) BYWAJĄ nazwane "cos.md", a wtedy:
+ *   - `getSize()` zwraca 0, więc limit MAX_NOTE_BYTES ich nie ogranicza,
+ *   - `getBlob()` eksportuje je (np. do PDF), więc `getDataAsString()` zwraca
+ *     wielomegabajtowy binarny śmieć zamiast Markdowna.
+ * Odrzucamy je jawnie, zamiast polegać na samym rozszerzeniu w nazwie.
+ */
+function isPlainTextNote_(file) {
+  var mime = String(file.getMimeType ? file.getMimeType() : '');
+  if (mime.indexOf('application/vnd.google-apps') === 0) return false;
+  return mime.indexOf('text/') === 0 || mime === 'application/octet-stream' || mime === '';
+}
+
 function childFolder_(folder, name) {
   var it = folder.getFoldersByName(name);
   return it.hasNext() ? it.next() : null;
@@ -347,12 +361,22 @@ function consumeAuthCode_(props, jti, expSeconds) {
 // Dyspozytor operacji
 // ---------------------------------------------------------------------------
 
+/**
+ * Sprawdza WŁASNĄ właściwość mapy operacji. Zwykłe `MAP[op]` dziedziczy po
+ * Object.prototype, więc `op="constructor"`, `"toString"`, `"__proto__"` itd.
+ * przechodziły przez allowlistę (dopiero `switch` niżej je odrzucał). Tutaj
+ * allowlista jest szczelna sama w sobie — nie polega na drugim sprawdzeniu.
+ */
+function hasOp_(map, op) {
+  return typeof op === 'string' && Object.prototype.hasOwnProperty.call(map, op) && map[op] === true;
+}
+
 function dispatch_(request, props) {
   var op = request && request.op;
-  if (!op || (!READ_OPS[op] && !META_OPS[op])) {
+  if (!hasOp_(READ_OPS, op) && !hasOp_(META_OPS, op)) {
     throw new Error('Nieznana operacja.');
   }
-  if (META_OPS[op]) {
+  if (hasOp_(META_OPS, op)) {
     switch (op) {
       case 'consumeAuthCode': return consumeAuthCode_(props, request.jti, request.exp);
       default: throw new Error('Nieobsługiwana operacja.');
@@ -472,7 +496,7 @@ function opSearch_(root, request) {
       var path = basePath ? basePath + '/' + name : name;
       var matched = name.toLowerCase().indexOf(query) !== -1;
       var snippet = undefined;
-      if (!matched && /\.md$/i.test(name) && contentReads < MAX_SEARCH_CONTENT_READS) {
+      if (!matched && /\.md$/i.test(name) && isPlainTextNote_(f) && contentReads < MAX_SEARCH_CONTENT_READS) {
         var fileSize = Math.max(Number(f.getSize()) || 0, 0);
         if (fileSize > MAX_NOTE_BYTES) {
           // Zbyt duży plik pomijamy zamiast ładować go w całości do pamięci.
@@ -515,6 +539,9 @@ function opRead_(root, rootId, request) {
   var resolved = resolveByPath_(root, safe);
   if (!resolved.file) throw new Error('Notatka nie istnieje.');
   assertDescendant_(resolved.file, rootId);
+  if (!isPlainTextNote_(resolved.file)) {
+    throw new Error('Notatka nie jest zwykłym plikiem tekstowym.');
+  }
   if (resolved.file.getSize() > MAX_NOTE_BYTES) {
     throw new Error('Notatka przekracza limit rozmiaru odczytu.');
   }

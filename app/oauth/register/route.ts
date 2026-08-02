@@ -28,7 +28,13 @@ export async function POST(req: Request) {
   const cfg = loadConfig();
   let body: Record<string, unknown>;
   try {
-    body = (await req.json()) as Record<string, unknown>;
+    const parsed: unknown = await req.json();
+    // `JSON.parse("null")` zwraca null, a tablice/liczby też są poprawnym JSON-em.
+    // Bez tego sprawdzenia `body.redirect_uris` rzucało TypeError → 500.
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return oauthError("invalid_client_metadata", "Treść żądania musi być obiektem JSON.");
+    }
+    body = parsed as Record<string, unknown>;
   } catch {
     return oauthError("invalid_client_metadata", "Treść żądania musi być JSON-em.");
   }

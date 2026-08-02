@@ -17,17 +17,31 @@ import { corsHeaders, json, oauthError } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * RFC 6749 §3.2: parametr żądania NIE MOŻE wystąpić więcej niż raz.
+ * Wcześniej wygrywała ostatnia wartość, przez co `grant_type=refresh_token&
+ * grant_type=authorization_code` było akceptowane. Teraz duplikat = odmowa
+ * (fail closed), co zamyka też furtkę na parameter smuggling przez pośredniki.
+ */
+class DuplicateParameterError extends Error {}
+
 async function parseBody(req: Request): Promise<Record<string, string>> {
   const contentType = req.headers.get("content-type") ?? "";
+  const out: Record<string, string> = Object.create(null);
+  const put = (k: string, v: unknown) => {
+    if (Object.prototype.hasOwnProperty.call(out, k)) throw new DuplicateParameterError(k);
+    out[k] = String(v);
+  };
+
   if (contentType.includes("application/json")) {
-    const obj = (await req.json()) as Record<string, unknown>;
-    const out: Record<string, string> = {};
-    for (const [k, v] of Object.entries(obj)) out[k] = String(v);
+    const parsed: unknown = await req.json();
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("body must be a JSON object");
+    }
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) put(k, v);
     return out;
   }
-  const form = await req.formData();
-  const out: Record<string, string> = {};
-  for (const [k, v] of form.entries()) out[k] = String(v);
+  for (const [k, v] of (await req.formData()).entries()) put(k, v);
   return out;
 }
 
@@ -36,8 +50,17 @@ export async function POST(req: Request) {
   if (limited) return limited;
 
   const cfg = loadConfig();
-  const body = await parseBody(req).catch(() => null);
-  if (!body) return oauthError("invalid_request", "Nie udało się odczytać treści żądania.");
+  let body: Record<string, string>;
+  try {
+    body = await parseBody(req);
+  } catch (err) {
+    return oauthError(
+      "invalid_request",
+      err instanceof DuplicateParameterError
+        ? "Parametr żądania nie może wystąpić więcej niż raz."
+        : "Nie udało się odczytać treści żądania.",
+    );
+  }
 
   if (body.grant_type !== "authorization_code") {
     return oauthError("unsupported_grant_type", "Obsługiwany jest tylko authorization_code.");

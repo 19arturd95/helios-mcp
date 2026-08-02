@@ -11,6 +11,8 @@ import { loadConfig } from "@/lib/config";
 import { issueAuthorizationCode, verifyOAuthState } from "@/lib/auth/tokens";
 import { evaluateGoogleIdentity } from "@/lib/auth/googleIdentity";
 import { enforceRateLimit } from "@/lib/security/rateLimit";
+import { constantTimeEqual, sha256Hex } from "@/lib/security/signing";
+import { LOGIN_COOKIE, loginCookieHeader, readSingleCookie } from "@/lib/auth/loginBinding";
 import { htmlError } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
@@ -28,11 +30,16 @@ export async function GET(req: Request) {
   const stateToken = url.searchParams.get("state");
   const googleError = url.searchParams.get("error");
 
+  // Ciasteczko wiążące jest jednorazowe — czyścimy je na KAŻDEJ ścieżce wyjścia,
+  // także błędnej, żeby nie dało się go użyć ponownie.
+  const isHttps = url.protocol === "https:";
+  const clearLogin = { "set-cookie": loginCookieHeader(null, isHttps) };
+
   if (googleError) {
-    return htmlError("Logowanie przerwane", `Google zwrócił błąd: ${googleError}.`);
+    return htmlError("Logowanie przerwane", `Google zwrócił błąd: ${googleError}.`, 400, clearLogin);
   }
   if (!code || !stateToken) {
-    return htmlError("Błąd logowania", "Brak parametru code lub state.");
+    return htmlError("Błąd logowania", "Brak parametru code lub state.", 400, clearLogin);
   }
 
   // Odtwórz oryginalne żądanie klienta MCP z podpisanego state.
@@ -40,7 +47,25 @@ export async function GET(req: Request) {
   try {
     st = await verifyOAuthState(cfg.authSecret, cfg.baseUrl, stateToken);
   } catch {
-    return htmlError("Błąd logowania", "Nieprawidłowy lub wygasły state.");
+    return htmlError("Błąd logowania", "Nieprawidłowy lub wygasły state.", 400, clearLogin);
+  }
+
+  // Powiązanie z przeglądarką: `state` jest ważny WYŁĄCZNIE w tej przeglądarce,
+  // która kliknęła „Zezwól" na ekranie zgody. Blokuje podstawienie ofierze
+  // gotowego linku do Google (RFC 9700 §4.7). Fail closed: brak lub niezgodne
+  // ciasteczko = odmowa, bez wymiany kodu Google i bez wystawienia kodu Heliosa.
+  const loginCookie = readSingleCookie(req.headers.get("cookie"), LOGIN_COOKIE);
+  if (
+    !st.browserBinding ||
+    !loginCookie ||
+    !constantTimeEqual(await sha256Hex(loginCookie), st.browserBinding)
+  ) {
+    return htmlError(
+      "Błąd logowania",
+      "To logowanie nie zostało rozpoczęte w tej przeglądarce. Rozpocznij je ponownie z poziomu swojego klienta MCP.",
+      400,
+      clearLogin,
+    );
   }
 
   // Wymiana kodu Google na tokeny.
@@ -58,14 +83,14 @@ export async function GET(req: Request) {
       }),
       signal: AbortSignal.timeout(10_000),
     });
-    if (!res.ok) return htmlError("Błąd logowania", "Nie udało się wymienić kodu Google.");
+    if (!res.ok) return htmlError("Błąd logowania", "Nie udało się wymienić kodu Google.", 400, clearLogin);
     const tok = (await res.json()) as { id_token?: string };
     idToken = tok.id_token;
   } catch {
-    return htmlError("Błąd logowania", "Błąd połączenia z Google.");
+    return htmlError("Błąd logowania", "Błąd połączenia z Google.", 400, clearLogin);
   }
   if (!idToken) {
-    return htmlError("Błąd logowania", "Brak id_token w odpowiedzi Google.");
+    return htmlError("Błąd logowania", "Brak id_token w odpowiedzi Google.", 400, clearLogin);
   }
 
   // Weryfikacja id_token (podpis/issuer/audience przez JWKS Google).
@@ -74,10 +99,17 @@ export async function GET(req: Request) {
     const verified = await jwtVerify(idToken, GOOGLE_JWKS, {
       issuer: ["https://accounts.google.com", "accounts.google.com"],
       audience: cfg.googleClientId,
+      algorithms: ["RS256", "ES256"],
     });
     payload = verified.payload;
   } catch {
-    return htmlError("Błąd logowania", "Nie udało się zweryfikować tożsamości Google.");
+    return htmlError("Błąd logowania", "Nie udało się zweryfikować tożsamości Google.", 400, clearLogin);
+  }
+
+  // OIDC `nonce`: id_token musi odpowiadać DOKŁADNIE temu żądaniu autoryzacji.
+  // Blokuje wstrzyknięcie cudzego id_token (RFC 9700 §4.4).
+  if (!st.googleNonce || payload.nonce !== st.googleNonce) {
+    return htmlError("Błąd logowania", "Odpowiedź Google nie pasuje do tego logowania.", 400, clearLogin);
   }
 
   // Ocena tożsamości (e-mail zweryfikowany + zgodny z ALLOWED_EMAIL) — logika
@@ -89,6 +121,7 @@ export async function GET(req: Request) {
       "Brak dostępu",
       "To konto Google nie ma uprawnień do tego serwera Helios.",
       403,
+      clearLogin,
     );
   }
 
@@ -111,6 +144,12 @@ export async function GET(req: Request) {
   // zapobiega jego zapisaniu przez pośredniczące cache'e/proxy.
   return new Response(null, {
     status: 302,
-    headers: { location: redirect.toString(), "cache-control": "no-store" },
+    headers: {
+      location: redirect.toString(),
+      "cache-control": "no-store",
+      // Jednorazowość: ciasteczko wiążące znika po udanym logowaniu, więc tego
+      // samego `state` nie da się użyć powtórnie.
+      ...clearLogin,
+    },
   });
 }
