@@ -15,7 +15,7 @@ ChatGPT / Claude  →  Helios MCP (Vercel / Next.js)  →  Helios Drive Adapter 
 ## Stan weryfikacji Fazy 1
 
 - produkcyjny build Next.js przechodzi bez sekretów i zmiennych środowiskowych,
-- testy lokalne: 129/129, bez pominiętych testów,
+- testy lokalne: 151/151, bez pominiętych testów,
 - oba typechecki przechodzą,
 - CI dla pull requestów wykonuje `npm ci`, testy, oba typechecki i build,
 - `npm audit --omit=dev`: 0 znanych podatności,
@@ -239,6 +239,15 @@ Szczegóły architektury i decyzji: [`docs/PLAN.md`](docs/PLAN.md).
   może wysłać `Origin: null`, ale jest akceptowany tylko przy
   `Sec-Fetch-Site: same-origin` i prawidłowym cookie. Odpowiedź po POST używa
   `303 See Other`, a CSP dopuszcza tylko zweryfikowane originy HTTPS.
+- **Powiązanie logowania Google z przeglądarką**: kliknięcie „Zezwól" ustawia
+  jednorazowe ciasteczko `helios_login` (`HttpOnly`, `SameSite=Lax`, 900 s),
+  którego skrót SHA-256 trafia do podpisanego `state`. `/oauth/callback`
+  wymaga zgodnego ciasteczka od przeglądarki — bez tego atakujący mógłby
+  podesłać ofierze autentyczny link logowania Google przechwycony z własnej
+  sesji DCR i przejąć jej kod autoryzacyjny.
+- **OIDC `nonce`**: wysyłany do Google przy przekierowaniu i weryfikowany w
+  `id_token` w `/oauth/callback` (RFC 9700 §4.4) — chroni przed powtórnym
+  użyciem przechwyconego `id_token`.
 - Opcjonalna allowlista `ALLOWED_OAUTH_REDIRECT_URIS` (dokładne dopasowanie,
   fail-closed) jako dodatkowa warstwa obok ekranu zgody.
 - Kod autoryzacyjny jest **jednorazowy**: atomowe zużycie `jti` przez Helios

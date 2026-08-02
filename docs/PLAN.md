@@ -51,13 +51,29 @@ Przepływ:
    podpisany, krótkożyciowy JWT — `AUD_CONSENT`, TTL 5 min). Brak sygnałów
    przeglądarki, duplikat ciasteczka albo nieznana decyzja są odrzucane.
    CSP dopuszcza wyłącznie zweryfikowane originy HTTPS, a odpowiedź po POST
-   używa `303 See Other`. Dopiero **teraz** następuje
-   przekierowanie do logowania Google; oryginalne parametry klienta przenosi podpisany
+   używa `303 See Other`. W tym momencie ustawiane jest też jednorazowe,
+   losowe **ciasteczko wiążące logowanie** `helios_login` (`HttpOnly`,
+   `SameSite=Lax`, TTL 900 s, `lib/auth/loginBinding.ts`) — jego skrót
+   SHA-256 (nigdy surowa wartość) trafia do podpisanego `state`. Bez tego
+   powiązania atakujący mógłby otworzyć własną sesję zgody z DCR pod
+   kontrolowanym `redirect_uri`, przechwycić autentyczny adres
+   `accounts.google.com/...?state=...` i podesłać go ofierze — ofiara
+   loguje się do Google, ale kod autoryzacyjny trafiłby do przeglądarki
+   atakującego. Dopiero **teraz** następuje
+   przekierowanie do logowania Google (z dodanym OIDC `nonce`, patrz krok 5);
+   oryginalne parametry klienta przenosi podpisany
    `state` (`AUD_STATE`). „Odrzuć" (lub nieprawidłowa/wygasła zgoda) kończy
    proces przekierowaniem do klienta z `error=access_denied`, bez logowania
    do Google i bez wydania kodu.
-5. `/oauth/callback` wymienia kod Google, weryfikuje `id_token` przez JWKS
-   Google (issuer/audience), sprawdza `email_verified` i `ALLOWED_EMAIL`
+5. `/oauth/callback` najpierw sprawdza, że przeglądarka przedstawia
+   ciasteczko `helios_login` zgodne ze skrótem zapisanym w `state` (odrzuca
+   duplikaty ciasteczka — fail closed) — to właśnie wiąże ten konkretny
+   powrót z Google z przeglądarką, która kliknęła „Zezwól". Następnie
+   wymienia kod Google, weryfikuje `id_token` przez JWKS
+   Google (issuer/audience) **oraz OIDC `nonce`** (musi dokładnie odpowiadać
+   wartości wysłanej do Google w kroku 4, RFC 9700 §4.4 — chroni przed
+   powtórnym użyciem przechwyconego `id_token`), sprawdza `email_verified` i
+   `ALLOWED_EMAIL`
    (wydzielone do `lib/auth/googleIdentity.ts`), a następnie wystawia
    **nasz** krótki kod autoryzacyjny (z losowym `jti`).
 6. `/oauth/token` wymaga `client_id`/`redirect_uri`/`resource` (dokładna
@@ -124,6 +140,7 @@ lib/
   auth/constants.ts       # jedyny scope Fazy 1
   auth/verifyToken.ts     # Resource Server: Bearer → e-mail → ALLOWED_EMAIL
   auth/googleIdentity.ts  # ocena tożsamości Google (email/email_verified) — czysta funkcja
+  auth/loginBinding.ts    # ciasteczko wiążące logowanie Google z przeglądarką (helios_login)
   auth/metadata.ts        # metadane OAuth
   tools/handlers.ts       # logika 7 narzędzi (czyste funkcje)
   tools/schemas.ts        # walidacja Zod
@@ -179,7 +196,10 @@ od właściwości skryptu, nieznana operacja Apps Script, `assertDescendant_`
 dla pliku spoza `ROOT_FOLDER_ID`, rate limiting (`429` + `Retry-After`),
 adnotacje tylko do odczytu i schematy wyjścia w rzeczywistym `tools/list`,
 `structuredContent` oraz usuwanie identyfikatorów Google Drive z publicznych
-wyników MCP.
+wyników MCP — a od bieżącego domknięcia Fazy 1 także: powiązanie logowania
+Google z przeglądarką (`helios_login`, zgodność/duplikat/brak ciasteczka,
+`lib/auth/loginBinding.ts`) oraz OIDC `nonce` w `/oauth/callback` (zgodność,
+brak, niezgodność z wartością wysłaną do Google).
 
 Zasada kluczowa: testy weryfikują **realne** funkcje `apps-script/Code.gs`
 (ładowane do Node przez `vm`, z w pełni podstawionym fałszywym
@@ -192,7 +212,7 @@ nie jest testowana na poziomie HTTP (jose na Node pobiera JWKS przez
 sensownie zamockować) — logika PO weryfikacji podpisu jest wydzielona do
 `lib/auth/googleIdentity.ts` i tam w pełni testowana.
 
-Aktualny wynik: 129 testów, 129 zaliczonych, 0 pominiętych. Oba typechecki,
+Aktualny wynik: 151 testów, 151 zaliczonych, 0 pominiętych. Oba typechecki,
 produkcyjny build Next.js i `npm audit --omit=dev` przechodzą. Build nie
 wymaga sekretów. Produkcyjny OAuth z Google oraz odczyt przez ChatGPT zostały
 potwierdzone E2E. Pełny test E2E z Claude pozostaje do wykonania.
