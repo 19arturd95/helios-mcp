@@ -20,8 +20,8 @@ ChatGPT / Claude  →  Helios MCP (Vercel / Next.js)  →  Helios Drive Adapter 
 - CI dla pull requestów wykonuje `npm ci`, testy, oba typechecki i build,
 - `npm audit --omit=dev`: 0 znanych podatności,
 - produkcja działa pod `https://helios-mcp.vercel.app/api/mcp`,
-- OAuth z Google i rzeczywisty odczyt przez ChatGPT zostały potwierdzone E2E;
-  pełny test E2E z Claude pozostaje do wykonania.
+- OAuth z Google i rzeczywisty odczyt przez ChatGPT oraz Claude zostały
+  potwierdzone E2E — Faza 1 spełnia wszystkie warunki zamknięcia.
 
 > Ten dokument jest napisany dla osoby nietechnicznej. Wykonuj kroki po kolei.
 > Wszędzie, gdzie widzisz `TWOJE-...`, wstaw własną wartość.

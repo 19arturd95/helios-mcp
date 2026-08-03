@@ -214,8 +214,11 @@ sensownie zamockować) — logika PO weryfikacji podpisu jest wydzielona do
 
 Aktualny wynik: 151 testów, 151 zaliczonych, 0 pominiętych. Oba typechecki,
 produkcyjny build Next.js i `npm audit --omit=dev` przechodzą. Build nie
-wymaga sekretów. Produkcyjny OAuth z Google oraz odczyt przez ChatGPT zostały
-potwierdzone E2E. Pełny test E2E z Claude pozostaje do wykonania.
+wymaga sekretów. Produkcyjny OAuth z Google oraz odczyt przez ChatGPT i Claude
+zostały potwierdzone E2E (2026-08-03: `helios_status`, `helios_list_tree`,
+`helios_search` wywołane produkcyjnie przez połączony connector Claude,
+zwróciły realne dane z Google Drive). Ostatni warunek zamknięcia Fazy 1 z
+tego dokumentu jest spełniony.
 
 ## 7. Zależności i audyt
 
